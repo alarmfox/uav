@@ -1,8 +1,9 @@
 # linux-av: A malware detection program for Linux
 
-**WARNING**: this project is not production ready.
+> [!WARNING]
+> `shadowfax` is an early development project.
 
-A basic malware scanner written in Rust for Linux desktop users.
+A basic malware scanner Linux desktop users.
 
 ## Features
 
