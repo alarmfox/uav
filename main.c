@@ -1,175 +1,84 @@
+#define _XOPEN_SOURCE 500
+#define _GNU_SOURCE
 #include <assert.h>
 #include <errno.h>
+#include <ftw.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
-#include <curl/curl.h>
 #include <openssl/evp.h>
-#include <yara_x.h>
-#include <zip.h>
 
-/* ======================================== Constants ============================================ */
-static const char YR_RULES_URL [] = "https://github.com/YARAHQ/yara-forge/releases/latest/download/yara-forge-rules-core.zip";
-static const char YR_RULES_ZIP [] = "packages/core/yara-rules-core.yar";
-static const char YR_RULES_FILE [] = "yr_rules.yar";
+/* ======================================== Constants =========================================== */
+static const char YR_RULES_FILE [] = "data/av_yara_rules.yar";
+static const char MB_SHA256_FILE [] = "data/av_sha256_signatures.txt";
+static const char BUSYBOX_ZIP [] = "data/av_sandbox_busybox.zip";
+static const char SANDBOX_CONFIG[] = "data/av_sandbox_configure.sh";
+static const char SANDBOX_ENTRYPOINT[] = "data/av_sandbox_entrypoint.sh";
+static const char hex[] = "0123456789abcdef";
+/* =========================================== Types ============================================ */
+#define SHA256_DIGEST_LEN 32
+struct av_context {
 
-static const char MB_SHA256_URL [] = "https://bazaar.abuse.ch/export/txt/sha256/full/";
-static const char MB_SHA256_ZIP [] = "full_sha256.txt";
-static const char MB_SHA256_FILE [] = "mb_sha256.txt";
-
-struct sandbox {
-  char *rootdir;
+  /* Each eleement of the array is a 32 byte digest */
+  unsigned char (*signatures)[SHA256_DIGEST_LEN];
+  size_t sigcount;
 };
 
-static int extract_single_file(const char *zipname, const char *zip_internal_path, const char *output_path) {
+/* ====================================== Utils ================================================= */
+/* Convert the current digest in a hex string */
+static void digest_to_hex(const unsigned char *digest, int len, char *buf, int *hex_count) {
 
-  int err = 0;
-  char buf[8192];
-  zip_t *za;
-  zip_file_t *zf;
-  struct zip_stat st;
-  zip_int64_t idx;
+  if(digest == NULL || buf == NULL) return;
 
-  /* Open the file as a zip */
-  za = zip_open(zipname, ZIP_RDONLY, &err);
-  if (!za) {
-    zip_error_to_str(buf, sizeof(buf), err, errno);
-    fprintf(stderr, "[ZIP]: can't open zip archive: %s\n", buf);
-    return 1;
+  for (int i = 0; i < len; ++i) {
+    buf[i * 2] = hex[digest[i] >> 4];
+    buf[i * 2 + 1] = hex[digest[i] & 0xF];
   }
 
-  idx = zip_name_locate(za, zip_internal_path, 0);
-  if (idx < 0) {
-    zip_close(za);
-    fprintf(stderr, "[ZIP]: cannot find file: %s\n", zip_internal_path);
-    return 1;
+  if(hex_count) *hex_count = len * 2;
+
+}
+
+static inline int hexval(char c) {
+ if (c >= '0' && c <= '9') return c - '0';
+ else if (c >= 'a' && c <='f') return  c - 'a' + 10;
+ else if (c >= 'A' && c <='F') return c - 'A' + 10; 
+
+ /* If reach here we are not parsing an hexadecimal value */
+ assert(0);
+}
+
+static void digest_from_hex(const char *buf, int len, unsigned char *digest, int *digest_len) {
+
+  if(!digest) return;
+
+  assert(len % 2 == 0);
+  for (int i = 0; i < len; i += 2) {
+    int hi = hexval(buf[i]);
+    int lo = hexval(buf[i + 1]);
+
+    digest[i / 2] = (unsigned char) ((hi << 4) | lo);
   }
 
-  if (zip_stat_index(za, idx, 0, &st) != 0) {
-    zip_error_to_str(buf, sizeof(buf), err, errno);
-    fprintf(stderr, "[ZIP]: cannot stat: %s\n", buf);
-    return 1;
-  }
- 
-  zf = zip_fopen_index(za, idx, 0);
-  if (!zf) {
-    zip_close(za);
-    return 1;
+  if(digest_len) *digest_len = len / 2;
+}
+
+static int compare_digest(const unsigned char *a, const unsigned char *b, int len) {
+
+  for(int i = 0; i < len; ++i) {
+    if (a[i] != b[i]) return a[i] - b[i];
   }
 
-  FILE *out = fopen(output_path, "wb");
-  if (!out) {
-    zip_fclose(zf);
-    zip_close(za);
-    return 1;
-  }
-
-  zip_int64_t total = 0;
-
-  while (total < st.size) {
-    zip_int64_t len = zip_fread(zf, buf, sizeof(buf));
-    if (len < 0) break;
-    fwrite(buf, 1, (size_t)len, out);
-    total += len;
-  }
-
-  fclose(out);
-  zip_fclose(zf);
-  zip_close(za);
   return 0;
 }
 
-static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *stream) {
-  size_t written = fwrite(ptr, size, nmemb, (FILE *)stream);
-  return written;
-}
-
-static int download_file(const char *url, const char *output_path) {
-
-  CURL *curl;
-  CURLcode res;
-  FILE *pagefile;
-
-  res = curl_global_init(CURL_GLOBAL_ALL);
-  if(res) {
-    fprintf(stderr, "Could not init libcurl\n");
-    return (int)res;
-  }
-
-  pagefile = fopen(output_path, "wb");
-
-  assert(pagefile);
-
-  /* init the curl session */
-  curl = curl_easy_init();
-
-  if(!curl) {
-    fprintf(stderr, "Could not init libcurl\n");
-    return 1;
-  }
-
-  /* set URL to get here */
-  curl_easy_setopt(curl, CURLOPT_URL, url);
-
-  /* Switch on full protocol/debug output while testing */
-  curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
-
-  /* disable progress meter, set to 0L to enable it */
-  curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
-
-  /* send all data to this function  */
-  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
-
-  /* follow redirects */
-  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-
-  /* write the page body to this file handle */
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, pagefile);
-
-  /* get it! */
-  res = curl_easy_perform(curl);
-
-  // TODO: inspect return code
-  assert(res == CURLE_OK);
-
-  fclose(pagefile);
-
-  /* cleanup curl stuff */
-  curl_easy_cleanup(curl);
-  curl_global_cleanup();
-
-  return (int)res;
-}
-
-static int download_and_extract_single_file(const char *url, const char *zip_internal_path, const char *output_path) {
-  char tempname[] = "/tmp/linux_av_XXXXXX";
-  int fd = mkstemp(tempname);
-
-  if(fd < 0) {
-    fprintf(stderr, "cannot create tempfile");
-    return 1;
-  }
-
-  /* Download YARA_RULES */
-  download_file(url, tempname);
-  extract_single_file(tempname, zip_internal_path, output_path);
-  close(fd);
-  remove(tempname);
+static int extract_directory(const char *src, const char* output_path) {
   return 0;
-}
-
-static int setup() {
-  int ret;
-
-  /* Download and extract yara rules */
-  ret = download_and_extract_single_file(YR_RULES_URL, YR_RULES_ZIP, YR_RULES_FILE);
-
-  if (ret) return ret;
-
-  /* Download and extract malware bazaar hashes */
-  return download_and_extract_single_file(MB_SHA256_URL, MB_SHA256_ZIP, MB_SHA256_FILE);
 }
 
 static unsigned char *calculate_sha256_from_file(FILE *file, unsigned int *digest_len) {
@@ -200,41 +109,215 @@ static unsigned char *calculate_sha256_from_file(FILE *file, unsigned int *diges
   return digest;
 }
 
-static void scanfile(const char *path) {
+int unlink_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf) {
+  int rv = remove(fpath);
+
+  if (rv) fprintf(stderr, "cannot remove %s", fpath, strerror(errno));
+
+  return rv;
+}
+
+static int rmtree(const char *path) {
+  return nftw(path, unlink_cb, 64, FTW_DEPTH | FTW_PHYS);
+}
+
+static int copyfile(const char *src, const char *dst) {
+  return 0;
+}
+
+/* ===================================== Sandbox ================================================ */
+struct sandbox {
+  char *root;
+};
+
+// TODO: add sandbox profile: server, desktop, minimal 
+static int av_create_sandbox(struct sandbox *s, const char *root) {
+  int ret;
+  pid_t pid;
+
+  s->root = root;
+
+  pid = fork();
+
+  switch(pid) {
+  case -1:
+    fprintf(stderr, "[SANDBOX] cannot create process: %s", strerror(errno));
+    return 1;
+  case 0:
+    int ret = chroot(root);
+    if(ret) {
+      fprintf(stderr, "[SANDBOX] cannot chroot: %s\n", strerror(errno));
+      _exit(1);
+    }
+    chdir("/");
+    char *argv[] = { "/bin/sh", "av_sandbox_configure.sh", NULL };
+    execv("/bin/sh", argv);
+
+    _exit(EXIT_SUCCESS);
+  default:
+    waitpid(pid, 0, 0);
+  }
+
+  return 0;
+}
+
+static int av_run_program_in_sandbox(struct sandbox *s, const char *program) {
+  pid_t pid = fork();
+
+  switch(pid) {
+  case -1:
+    fprintf(stderr, "[SANDBOX] cannot create process: %s", strerror(errno));
+    return 1;
+  case 0:
+    unshare(CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWNET);
+    int ret = chroot(s->root);
+    if(ret) {
+      fprintf(stderr, "[SANDBOX] cannot chroot: %s\n", strerror(errno));
+      _exit(1);
+    }
+
+    chdir("/");
+    char *const argv[] = { "/bin/sh", "av_sandbox_entrypoint.sh", program, NULL };
+    execv("/bin/sh", argv);
+
+    _exit(EXIT_SUCCESS);
+  default:
+    waitpid(pid, 0, 0);
+  }
+
+  return 0;
+}
+
+static void av_destroy_sandbox(const struct sandbox *s) {
+  int ret;
+  ret = rmtree(s->root);
+
+  if (ret) fprintf(stderr, "[SANDBOX] cannot remove %s: %s\n", s->root, strerror(errno));
+}
+
+/* ==================================== Commands ================================================= */
+/* Scan a file */
+static void av_scanfile(const struct av_context *ctx, const char *path) {
   unsigned int digest_len;
   unsigned char *digest;
-  char hex_digest[128];
+  char hex_digest[65];
   FILE *file = fopen(path, "rb");
   assert(file);
 
   digest = calculate_sha256_from_file(file, &digest_len);
   fclose(file);
+
   assert(digest);
-  assert(digest_len == 32);
+  assert(digest_len == SHA256_DIGEST_LEN);
 
-  for (int i = 0; i < digest_len; ++i)
-    sprintf(hex_digest + (i * 2), "%02x", digest[i]);
-  hex_digest[digest_len * 2] = 0;
-
-  printf("0x%s\n", hex_digest);
-
-  file = fopen(MB_SHA256_FILE, "r");
-  assert(file);
-
-  char line[128];
-  while(fgets(line, sizeof(line), file) != NULL) {
-    if(strncmp(line, hex_digest, digest_len * 2) == 0) {
-      printf("found malware\n");
+  for(size_t i = 0; i < ctx->sigcount; ++i) {
+    if(compare_digest(digest, ctx->signatures[i], SHA256_DIGEST_LEN) == 0) {
+      digest_to_hex(digest, SHA256_DIGEST_LEN, hex_digest, 0);
+      hex_digest[64] = 0;
+      printf("[Check %zu] \"%s\" is a virus. Signature: 0x%s\n", i, path, hex_digest);
+      break;
     }
   }
 
-  fclose(file);
   OPENSSL_free(digest);
 }
 
+/* Initialize av_context struct */
+// TODO: check configuration files signatures
+static int av_init(struct av_context *ctx) {
+
+  /*
+   * Format:
+   * - preamble
+   * - signatures
+   * - number of signatures:  # Number of entries: 1015158\r\n
+   */
+
+  char size[32];
+  char c; 
+  int n = 0;
+  long pos = 0;
+  FILE* file = fopen(MB_SHA256_FILE, "r");
+
+  if(!file) return 1;
+
+  /* Jump to the end of file */
+  fseek(file, 0L, SEEK_END);
+
+  /* Skip '\r\n' */
+  fseek(file, -2, SEEK_CUR);
+
+  /* Read the number of entries backwards */
+  pos = ftell(file);
+
+  do {
+    fseek(file, pos--, SEEK_SET);
+    c = fgetc(file);
+    size[n++] = c; 
+  } while(pos >= 0 && c != ' ');
+  size[n] = 0;
+
+  // Put in correct byte order for atol
+  for(int i = 0; i < n/2; ++i) {
+    char tmp = size[i];
+
+    /* Swap with other half array */
+    size[i] = size[n - i -1];
+    size[n - i - 1] = tmp;
+  }
+  ctx->sigcount = atol(size);
+  ctx->signatures = malloc(sizeof(unsigned char) * ctx->sigcount * SHA256_DIGEST_LEN);
+  printf("%ld signatures \n", ctx->sigcount);
+
+  /* Go back to first entry */
+  fseek(file, 0, SEEK_SET);
+
+  /* Skip all lines beginning with '#' */
+  char line[256];
+  size_t i = 0;
+  while(fgets(line, 128, file) != NULL && i < ctx->sigcount) {
+    if (line[0] == '#') continue;
+    /* Remove '\r\n' */
+    int k;
+    digest_from_hex(line, SHA256_DIGEST_LEN * 2, ctx->signatures[i], &k);
+    assert(k == SHA256_DIGEST_LEN);
+    i += 1;
+  }
+
+  // TODO: parse yara rules
+
+  fclose(file);
+  return 0;
+}
+
+static void av_context_free(struct av_context *ctx) {
+  if(ctx == NULL || ctx->signatures == NULL) return;
+
+  free(ctx->signatures);
+}
 
 int main(void) {
+  int ret;
+  static struct av_context ctx = { 0 };
+  struct sandbox s;
+  const char sample[] = "sample.sh";
 
-  scanfile("sample.sh");
+  ret = av_init(&ctx);
+
+  if(ret) {
+    fprintf(stderr, "cannot init av: (errno=%d) %s \nExiting.\n", errno, strerror(errno));
+    return 1;
+  }
+
+  av_scanfile(&ctx, sample);
+
+  ret = av_create_sandbox(&s, "sandbox");
+  if(ret) goto exit;
+
+  // ret = av_run_program_in_sandbox(&s, "ls");
+  // if(ret) goto exit;
+
+  av_context_free(&ctx);
+exit:
   return 0;
 }
