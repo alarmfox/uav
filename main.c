@@ -456,15 +456,14 @@ static int av_sandbox_run_program(const struct av_sandbox *s, const char *progra
     return 1;
   }
 
-  ret = avbpf__load(skel);
+  /* Initialize variables before attaching */
+  skel->rodata->target_cgroup_id = cgid;
 
+  ret = avbpf__load(skel);
   if(ret) {
     fprintf(stderr, "[SANDBOX] cannot load ebpf program\n");
     goto cleanup;
   }
-
-  /* Initialize variables before attaching */
-  skel->bss->target_cgroup_id = cgid;
 
   ret = avbpf__attach(skel);
   if(ret) {
@@ -715,7 +714,7 @@ int main(void) {
   }
 
   /* Execute the program in a sandbox for demonstration purposes */
-  ret = av_sandbox_create(&s, "sandbox", 1, NULL);
+  ret = av_sandbox_create(&s, "sandbox", 0, NULL);
   if (ret != 0) {
     fprintf(stderr, "[SANDBOX] cannot create sandbox\n");
     goto exit;
