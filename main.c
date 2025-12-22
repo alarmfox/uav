@@ -152,7 +152,7 @@ static int create_cgroup(const char *cgname) {
 
   /* Enable controllers in ROOT cgroup for our child cgroup */
   /* Format: "+controller1 +controller2 +controller3" */
-  ret = enable_controllers("", "+cpu +memory +pids +io");
+  ret = enable_controllers("", "+cpu +memory +pids");
   if (ret != 0) {
     fprintf(stderr, "[SANDBOX] cannot enable controllers in root\n");
     return ret;
@@ -477,6 +477,8 @@ static int av_sandbox_run_program(const struct av_sandbox *s, const char *progra
  
   if (pipe(pipefd) == -1) {
     fprintf(stderr, "[SANDBOX] cannot create pipe: %s", strerror(errno));
+    close(pipefd[0]);
+    close(pipefd[1]);
     goto cleanup;
   }
 
@@ -514,33 +516,46 @@ static int av_sandbox_run_program(const struct av_sandbox *s, const char *progra
 
     _exit(EXIT_SUCCESS);
     /* Parent */
-  default:
-    /* Ignore read end */
-    ret = close(pipefd[0]);
-    if (ret) {
-      fprintf(stderr, "[SANDBOX] child cannot close pipe: %s", strerror(errno));
-      kill(pid, SIGKILL);
+  default: {
+      char tosend = 'X';
+      int wstatus;
+
+      /* Ignore read-end */
+      ret = close(pipefd[0]);
+      if (ret) {
+        fprintf(stderr, "[SANDBOX] child cannot close pipe: %s", strerror(errno));
+        kill(pid, SIGKILL);
+      }
+
+      /* Move child into target cgroup */
+      ret = cgroup_add_pid(cgname, pid);
+      if (ret) {
+        fprintf(stderr, "[SANDBOX] cannot move child in cgroup %s, exiting...", cgname);
+        kill(pid, SIGKILL);
+      }
+
+
+      /* Signal that the process can run (for now just send 'X') */
+      write(pipefd[1], &tosend, 1);
+      ret = close(pipefd[1]);
+
+      if(ret) {
+        fprintf(stderr, "[SANDBOX] parent cannot close pipe: %s", strerror(errno));
+        kill(pid, SIGKILL);
+      }
+
+      /* Wait for the process to terminate */
+      waitpid(pid, &wstatus, 0);
+      if (WIFEXITED(wstatus)) {
+        fprintf(stderr, "[SANDBOX] process exited status=%d\n", WEXITSTATUS(wstatus));
+      } else if (WIFSIGNALED(wstatus)) {
+        fprintf(stderr, "[SANDBOX] process killed by signal %d\n", WTERMSIG(wstatus));
+      } else if (WIFSTOPPED(wstatus)) {
+        fprintf(stderr, "[SANDBOX] process stopped by signal %d\n", WSTOPSIG(wstatus));
+      } else if (WIFCONTINUED(wstatus)) {
+        fprintf(stderr,"[SANDBOX] process continued\n");
+      }
     }
-    /* Move child into target cgroup */
-    ret = cgroup_add_pid(cgname, pid);
-    if (ret) {
-      fprintf(stderr, "[SANDBOX] cannot move child in cgroup %s, exiting...", cgname);
-      kill(pid, SIGKILL);
-    }
-
-    char tosend = 'X';
-
-    /* Signal that the process can run (for now just send 'X') */
-    write(pipefd[1], &tosend, 1);
-    ret = close(pipefd[1]);
-
-    if(ret) {
-      fprintf(stderr, "[SANDBOX] parent cannot close pipe: %s", strerror(errno));
-      kill(pid, SIGKILL);
-    }
-
-    /* Wait for the process to terminate */
-    waitpid(pid, 0, 0);
   }
 
 cleanup:
