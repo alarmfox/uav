@@ -1,9 +1,9 @@
-# linux-av: A malware detection program for Linux
+# UAV: Uncomplicated AntiVirus program for Linux
 
 > [!WARNING]
-> `simplav` is an early development project.
+> `uav` is an early development project.
 
-A basic malware scanner Linux desktop users.
+A basic malware scanner Linux users.
 
 ## Features
 
