@@ -1,4 +1,4 @@
-APP     = simplav
+APP     = uav 
 BPFTOOL = bpftool
 
 # CC      = gcc
@@ -27,7 +27,6 @@ vmlinux.h:
 av.bpf.o: av.bpf.c vmlinux.h
 	clang -Wall -g -O2 -target bpf -c $< -o $@
 
-.PHONY: av.skel.h
 av.skel.h: av.bpf.o
 	$(BPFTOOL) gen skeleton $< name avbpf > $@
 
