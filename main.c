@@ -13,17 +13,19 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include <zip.h>
-#include <openssl/evp.h>
 #include <bpf/libbpf.h>
+#include <openssl/evp.h>
+#include <zip.h>
+
+/* eBPF program */
 #include "av.skel.h"
 
 /* ======================================== Constants =========================================== */
-static const char YR_RULES_FILE [] = "data/av_yara_rules.yar";
 static const char MB_SHA256_FILE [] = "data/av_sha256_signatures.txt";
 static const char BUSYBOX_ZIP [] = "data/av_sandbox_busybox.zip";
 static const char SANDBOX_ENTRYPOINT[] = "data/av_sandbox_entrypoint.sh";
-static const char hex[] = "0123456789abcdef";
+static const char AV_SANDBOX_CGROUP_NAME[] = "av_sandbox";
+static const char AV_SANDBOX_NETNS_NAME[] = "av_sandbox_netns";
 
 /* =========================================== Types ============================================ */
 #define SHA256_DIGEST_LEN 32
@@ -57,25 +59,22 @@ struct av_sandbox {
   char root[256];
 
   /* Limits at creation time. This can be overridden when running programs */
-  struct av_sandbox_limits default_limits;
-
-  /* Persistent `1` means that the sandbox is never destroyed */
-  int persistent;
+  struct av_sandbox_limits limits;
 };
 
 /* ====================================== Utils =================================================  */
 /* Convert the current digest in a hex string. The hexstring must be null terminated by the caller */
-static void digest_to_hex(const unsigned char *digest, int len, char *buf, int *hex_count) {
+static ssize_t digest_to_hex(const unsigned char *digest, int len, char *buf) {
+  static const char hex[] = "0123456789abcdef";
 
-  if(digest == NULL || buf == NULL) return;
+  if(digest == NULL || buf == NULL) return -1;
 
   for (int i = 0; i < len; ++i) {
     buf[i * 2] = hex[digest[i] >> 4];
     buf[i * 2 + 1] = hex[digest[i] & 0xF];
   }
 
-  if(hex_count) *hex_count = len * 2;
-
+  return len * 2;
 }
 
 static inline int hexval(char c) {
@@ -88,9 +87,9 @@ static inline int hexval(char c) {
 }
 
 /* Parses an hex digest and builds the original numeric digest value */
-static void digest_from_hex(const char *buf, int len, unsigned char *digest, int *digest_len) {
+static ssize_t digest_from_hex(const char *buf, int len, unsigned char *digest) {
 
-  if(!digest) return;
+  if(!digest) return -1;
 
   assert(len % 2 == 0);
   for (int i = 0; i < len; i += 2) {
@@ -100,10 +99,10 @@ static void digest_from_hex(const char *buf, int len, unsigned char *digest, int
     digest[i / 2] = (unsigned char) ((hi << 4) | lo);
   }
 
-  if(digest_len) *digest_len = len / 2;
+  return len / 2;
 }
 
-/* Compare 2 digests. This assumes that both digests have same length. 
+/* Compare 2 digests. This assumes that both digests have same length.
  * Returns 0 if they are the same (byte by byte) or the difference of the first non equal byte */
 static int compare_digest(const unsigned char *a, const unsigned char *b, int len) {
 
@@ -152,7 +151,7 @@ static int create_cgroup(const char *cgname) {
 
   /* Enable controllers in ROOT cgroup for our child cgroup */
   /* Format: "+controller1 +controller2 +controller3" */
-  ret = enable_controllers("", "+cpu +memory +pids");
+  ret = enable_controllers("", "+cpu +memory +pids +io");
   if (ret != 0) {
     fprintf(stderr, "[SANDBOX] cannot enable controllers in root\n");
     return ret;
@@ -284,15 +283,16 @@ static int extract_directory(const char *src, const char *output_path) {
   return 0;
 }
 
-/* Computes the signature from a file */
-static unsigned char *calculate_sha256_from_file(FILE *file, unsigned int *digest_len) {
+/* Computes SHA256 from a file */
+static ssize_t calculate_sha256_from_file(FILE *file, unsigned char *digest) {
+
+  if(!digest) return -1;
+
   int ret;
   EVP_MD_CTX *mdctx;
-  unsigned char *digest = (unsigned char *)OPENSSL_malloc(EVP_MD_size(EVP_sha256()));
   unsigned char buf[8192];
   size_t nbytes;
-
-  if (!digest) return NULL;
+  unsigned int digestlen;
 
   mdctx = EVP_MD_CTX_new();
   assert(mdctx);
@@ -305,12 +305,13 @@ static unsigned char *calculate_sha256_from_file(FILE *file, unsigned int *diges
     assert(ret == 1);
   }
 
-  ret = EVP_DigestFinal_ex(mdctx, digest, digest_len);
+  ret = EVP_DigestFinal_ex(mdctx, digest, &digestlen);
   assert(ret == 1);
+  assert(digestlen == SHA256_DIGEST_LEN);
 
   EVP_MD_CTX_free(mdctx);
 
-  return digest;
+  return digestlen;
 }
 
 static int unlink_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf) {
@@ -368,19 +369,16 @@ cleanup:
 }
 
 /* ===================================== Sandbox ================================================ */
-
-/* Create sandbox: extract zip directory in base root and copy entrypoint. */
-static int av_sandbox_create(struct av_sandbox *s, const char *sandbox_dir, int persistent, const struct av_sandbox_limits *limits) {
+/* Create sandbox: extract zip directory in base root and copy entrypoint script. */
+static int av_sandbox_create(struct av_sandbox *s, const char *sandbox_dir, const struct av_sandbox_limits *limits) {
   int ret;
 
-  /* if limits is NULL use default */
-  if(!limits) {
-    memcpy(&s->default_limits, &DEFAULT_LIMITS, sizeof(struct av_sandbox_limits));
-  } else {
-    memcpy(&s->default_limits, limits, sizeof(struct av_sandbox_limits));
+  /* if limits is NULL use DEFAULT_LIMITS */
+  const struct av_sandbox_limits *toapply = &DEFAULT_LIMITS;
+  if(limits) {
+    toapply = limits;
   }
-
-  s->persistent = persistent;
+  memcpy(&s->limits, toapply, sizeof(struct av_sandbox_limits));
 
   // Create sandbox root directory
   ret = mkdir(sandbox_dir, 0755);
@@ -411,70 +409,134 @@ static int av_sandbox_create(struct av_sandbox *s, const char *sandbox_dir, int 
   }
 
   /* Make entrypoint executable */
-  chmod(entrypoint_dst, 0755);
-
-  return 0;
+  return chmod(entrypoint_dst, 0755);
 }
 
-static int av_sandbox_run_program(const struct av_sandbox *s, const char *program, const struct av_sandbox_limits *limits) {
-  const char *cgname = "av_sandbox";
+static int setup_netns() {
+  int original_netnsfd, child_netnsfd;
+
+  original_netnsfd = open("/proc/self/ns/net", O_RDONLY);
+  if (original_netnsfd < 0)
+    handle_error("open original_netnsfd");
+
+  if (mkdir("/var/run/netns", 0755) != 0 && errno != EEXIST)
+    handle_error("cannot create /var/run/netns");
+ 
+  // Remove if it already exists
+  unlink(NETNS_PATH);
+
+  // Create a NEW network namespace by unsharing
+  if (unshare(CLONE_NEWNET) < 0)
+    handle_error("unshare");
+
+  // Now bind mount the current namespace to the file
+  // First create an empty file
+  child_netnsfd = open(NETNS_PATH, O_RDONLY | O_CREAT | O_EXCL, 0444);
+  if (child_netnsfd < 0)
+    handle_error("open netns file");
+
+  // Bind mount /proc/self/ns/net to that file
+  if (mount("/proc/self/ns/net", NETNS_PATH, "none", MS_BIND, NULL) < 0) {
+    unlink(NETNS_PATH);
+    handle_error("mount netns");
+  }
+
+  setns(original_netnsfd, CLONE_NEWNET);
+  close(child_netnsfd);
+  close(original_netnsfd);
+}
+
+/*
+ * Prepare the sandbox before executing a process in it:
+ * - move the process in a new cgroup and apply limits to it
+ * - move the process in a new netns and forward all traffic to the host for inspection
+ * - load and attach the eBPF program
+ */
+static int av_sandbox_prepare(const struct av_sandbox *s, const struct av_sandbox_limits *limits, pid_t pid, struct avbpf **skel) {
+
   int ret;
   unsigned long cgid;
-  struct avbpf *skel;
 
-  /* Create a new cgroup if exists */
-  ret = create_cgroup(cgname);
+  /* Create a new cgroup and apply limits */
+  ret = create_cgroup(AV_SANDBOX_CGROUP_NAME);
 
   if(ret) {
     fprintf(stderr, "[SANDBOX] cannot create cgroup: %s\n", strerror(errno));
     return 1;
   }
 
-  cgid = get_cgroup_id(cgname);
-  if(cgid == 0)  {
-    fprintf(stderr, "[SANDBOX] cannot get cgroupid: %s\n", strerror(errno));
-    return 1;
-  }
-
-  /* Set limits to cgroup, choose per program limits and apply default as default */
-  const struct av_sandbox_limits *toapply = &s->default_limits;
-  if(limits != NULL) toapply = limits;
-
-  ret = cgroup_set_limits(cgname, toapply);
+  ret = cgroup_set_limits(AV_SANDBOX_CGROUP_NAME, &s->limits);
   if(ret) {
     fprintf(stderr, "[SANDBOX] cannot set limits: %s\n", strerror(errno));
     return 1;
   }
 
-  printf("[SANDBOX] cgroup id %lu\n", cgid);
+  /* Move the child in the new cgroup */
+  ret = cgroup_add_pid(AV_SANDBOX_CGROUP_NAME, pid);
+  if (ret) {
+    fprintf(stderr, "[SANDBOX] cannot move child in cgroup %s, exiting...", AV_SANDBOX_CGROUP_NAME);
+    return 1;
+  }
+
+  /* Apply limits to the new cgroup fallback to default limits if current execution are not specified */
+  const struct av_sandbox_limits *toapply = &s->limits;
+  if(limits != NULL) toapply = limits;
+
+  ret = cgroup_set_limits(AV_SANDBOX_CGROUP_NAME, toapply);
+
+  if (ret) {
+    fprintf(stderr, "[SANDBOX] cannot set limits to cgroup %s, exiting...", AV_SANDBOX_CGROUP_NAME);
+    return 1;
+  }
+
+  /* Move the child in a new netns */
+
+  /* Configure the network namespace with veth pair */
+
+  /* Setup forwarding */
+
+  /* Move the child in a new pid namespace */
+
+  /* Load and attach eBPF program */
+  cgid = get_cgroup_id(AV_SANDBOX_CGROUP_NAME);
+  if(cgid == 0) {
+    fprintf(stderr, "[SANDBOX] cannot get cgroup id");
+    return 1;
+  }
+  printf("[SANDBOX] running in cgroup %s (%lu)\n", AV_SANDBOX_CGROUP_NAME, cgid);
 
   /* Load eBPF program */
-  skel = avbpf__open();
+  *skel = avbpf__open();
 
   if(!skel) {
     fprintf(stderr, "[SANDBOX] cannot open BPF skeleton\n");
     return 1;
   }
 
-  /* Initialize variables before attaching */
-  skel->rodata->target_cgroup_id = cgid;
+  /* Initialize constants variables before loading */
+  (*skel)->rodata->target_cgroup_id = cgid;
 
-  ret = avbpf__load(skel);
+  ret = avbpf__load(*skel);
   if(ret) {
     fprintf(stderr, "[SANDBOX] cannot load ebpf program\n");
-    goto cleanup;
+    return 1;
   }
 
-  ret = avbpf__attach(skel);
+  ret = avbpf__attach(*skel);
   if(ret) {
     fprintf(stderr, "[SANDBOX] cannot attach ebpf program\n");
-    goto cleanup;
+    return 1;
   }
 
-  /* Create a communication pipe for child and parent processes */
+  printf("[SANDBOX] loaded and attached eBPF program successfully\n");
+  return 0;
+}
+
+static int av_sandbox_run_program(const struct av_sandbox *s, const char *program, const struct av_sandbox_limits *limits) {
   int pipefd[2];
-  char buf;
+  struct avbpf *skel = NULL;
  
+  /* Create a communication pipe for child and parent processes */
   if (pipe(pipefd) == -1) {
     fprintf(stderr, "[SANDBOX] cannot create pipe: %s", strerror(errno));
     close(pipefd[0]);
@@ -489,58 +551,60 @@ static int av_sandbox_run_program(const struct av_sandbox *s, const char *progra
     fprintf(stderr, "[SANDBOX] cannot create process: %s", strerror(errno));
     goto cleanup;
     /* Child */
-  case 0:
-    unshare(CLONE_NEWNS | CLONE_NEWNET);
-    int ret = chroot(s->root);
-    /* If cannot chroot exit */
-    if(ret)  _exit(1);
-    chdir("/");
+  case 0: {
+      unshare(CLONE_NEWNS | CLONE_NEWNET);
+      int ret = chroot(s->root);
+      char buf;
+      /* If cannot chroot exit */
+      if(ret)  _exit(1);
+      chdir("/");
 
-    /* Close write-side of the pipe */
-    ret = close(pipefd[1]);
-    if(ret)  _exit(1);
+      /* Close write-side of the pipe */
+      ret = close(pipefd[1]);
+      if(ret)  _exit(1);
 
-    /* Wait to be moved in a new cgroup */
-    ssize_t nread = read(pipefd[0], &buf, 1);
+      /* Wait to be moved in a new cgroup */
+      ssize_t nread = read(pipefd[0], &buf, 1);
 
-    assert(buf == 'X');
-    assert(nread == 1);
+      assert(buf == 'X');
+      assert(nread == 1);
 
-    /* Close read-end of the pipe */
-    ret = close(pipefd[0]);
-    if(ret) _exit(1);
+      /* Close read-end of the pipe */
+      ret = close(pipefd[0]);
+      if(ret) _exit(1);
 
-    /* Run the suspicious program in it */
-    char *argv[] = { "/bin/sh", "av_sandbox_entrypoint.sh", program, NULL };
-    execv("/bin/sh", argv);
+      /* Run the suspicious program in it */
+      char * const argv[] = { "/bin/sh", "av_sandbox_entrypoint.sh", program, NULL };
+      execv("/bin/sh", argv);
 
-    _exit(EXIT_SUCCESS);
+      _exit(EXIT_SUCCESS);
+    }
     /* Parent */
   default: {
       char tosend = 'X';
-      int wstatus;
+      int wstatus, ret;
 
       /* Ignore read-end */
       ret = close(pipefd[0]);
       if (ret) {
-        fprintf(stderr, "[SANDBOX] child cannot close pipe: %s", strerror(errno));
+        fprintf(stderr, "[SANDBOX] child cannot close pipe: %s\n", strerror(errno));
         kill(pid, SIGKILL);
       }
 
-      /* Move child into target cgroup */
-      ret = cgroup_add_pid(cgname, pid);
+      /* Prepare sandbox for execution */
+      ret = av_sandbox_prepare(s, limits, pid, &skel);
+
       if (ret) {
-        fprintf(stderr, "[SANDBOX] cannot move child in cgroup %s, exiting...", cgname);
+        fprintf(stderr, "[SANDBOX] aborting sandbox execution due to previous configuration error\n");
         kill(pid, SIGKILL);
       }
-
 
       /* Signal that the process can run (for now just send 'X') */
       write(pipefd[1], &tosend, 1);
       ret = close(pipefd[1]);
 
       if(ret) {
-        fprintf(stderr, "[SANDBOX] parent cannot close pipe: %s", strerror(errno));
+        fprintf(stderr, "[SANDBOX] parent cannot close pipe: %s\n", strerror(errno));
         kill(pid, SIGKILL);
       }
 
@@ -559,7 +623,7 @@ static int av_sandbox_run_program(const struct av_sandbox *s, const char *progra
   }
 
 cleanup:
-  avbpf__destroy(skel);
+  if(skel) avbpf__destroy(skel);
 
   return 0;
 }
@@ -583,8 +647,6 @@ static int av_sandbox_copy_file(const struct av_sandbox *s, const char *src_path
 
 /* Destroy a sandbox by removing its filesystem tree */
 static void av_sandbox_destroy(const struct av_sandbox *s) {
-  if(s->persistent) return;
-
   int ret;
   ret = rmtree(s->root);
 
@@ -592,32 +654,6 @@ static void av_sandbox_destroy(const struct av_sandbox *s) {
 }
 
 /* ===================================== Main functions ========================================== */
-/* Scan a file */
-static int av_scanfile(const struct av_context *ctx, const char *path, unsigned char *odigest, int *diglen) {
-  unsigned int digest_len;
-  unsigned char *digest;
-  int ismalware = 0;
-  FILE *file = fopen(path, "rb");
-  assert(file);
-
-  digest = calculate_sha256_from_file(file, &digest_len);
-  fclose(file);
-
-  assert(digest);
-  assert(digest_len == SHA256_DIGEST_LEN);
-
-  for(size_t i = 0; i < ctx->sigcount && !ismalware; ++i) {
-    if(compare_digest(digest, ctx->signatures[i], SHA256_DIGEST_LEN) == 0) ismalware = 1;
-  }
-
-  /* Save file digest in odigest */
-  memcpy(odigest, digest, SHA256_DIGEST_LEN);
-  if(diglen) *diglen = SHA256_DIGEST_LEN;
-
-  OPENSSL_free(digest);
-
-  return ismalware;
-}
 
 /* Initialize av_context struct */
 // TODO: check configuration files signatures
@@ -674,16 +710,38 @@ static int av_init(struct av_context *ctx) {
   size_t i = 0;
   while(fgets(line, 128, file) != NULL && i < ctx->sigcount) {
     if (line[0] == '#') continue;
-    int k;
-    digest_from_hex(line, SHA256_DIGEST_LEN * 2, ctx->signatures[i], &k);
+    ssize_t k = digest_from_hex(line, SHA256_DIGEST_LEN * 2, ctx->signatures[i]);
     assert(k == SHA256_DIGEST_LEN);
     i += 1;
   }
 
-  // TODO: parse yara rules
-
   fclose(file);
   return 0;
+}
+
+/* Scan a single file */
+static int av_scanfile(const struct av_context *ctx, const char *path, unsigned char *odigest, int *diglen) {
+  ssize_t len;
+  unsigned char digest[256];
+  int ismalware = 0;
+  FILE *file = fopen(path, "rb");
+  assert(file);
+
+  len = calculate_sha256_from_file(file, digest);
+  fclose(file);
+
+  assert(digest);
+  assert(len == SHA256_DIGEST_LEN);
+
+  for(size_t i = 0; i < ctx->sigcount && !ismalware; ++i) {
+    if(compare_digest(digest, ctx->signatures[i], SHA256_DIGEST_LEN) == 0) ismalware = 1;
+  }
+
+  /* Save file digest in odigest */
+  memcpy(odigest, digest, SHA256_DIGEST_LEN);
+  if(diglen) *diglen = SHA256_DIGEST_LEN;
+
+  return ismalware;
 }
 
 static void av_context_free(struct av_context *ctx) {
@@ -693,43 +751,40 @@ static void av_context_free(struct av_context *ctx) {
 }
 
 int main(void) {
-
   int ret;
   struct av_sandbox s;
   static struct av_context ctx = { 0 };
   const char path[] = "sample.sh";
   const char target_path[] = "/usr/bin/sample.sh";
-  unsigned char digest[SHA256_DIGEST_LEN];
-  char hex_digest[256];
-  int digestlen, hexlen;
+  unsigned char digest[SHA256_DIGEST_LEN] = {0};
+  char hexdigest[SHA256_DIGEST_LEN * 2 + 1] = {0};
+  ssize_t digestlen, hexlen;
 
   ret = av_init(&ctx);
 
   if(ret) {
-    fprintf(stderr, "cannot init av: (errno=%d) %s \nExiting.\n", errno, strerror(errno));
+    fprintf(stderr, "cannot init av: (errno=%d) %s\nExiting.\n", errno, strerror(errno));
     exit(1);
   }
 
   printf("[AVINFO] Loaded %zu signatures\n", ctx.sigcount);
 
-  int ismalware = av_scanfile(&ctx, path, digest, &digestlen);
-
+  /* Compute program digest*/
+  FILE *f = fopen(path, "rb");
+  assert(f);
+  digestlen = calculate_sha256_from_file(f, digest);
   assert(digestlen == SHA256_DIGEST_LEN);
+  fclose(f);
 
   /* Convert the program digest in hex */
-  digest_to_hex(digest, digestlen, hex_digest, &hexlen);
-  hex_digest[hexlen] = 0;
-
+  hexlen = digest_to_hex(digest, digestlen, hexdigest);
   assert(hexlen == SHA256_DIGEST_LEN * 2);
+  hexdigest[hexlen] = 0;
 
-  if (ismalware) {
-    printf("[AVINFO] \"%s\" is a virus. Signature: 0x%s\n", path, hex_digest);
-  } else {
-    printf("[AVINFO] \"%s\" is not a virus. Signature: 0x%s\n", path, hex_digest);
-  }
+  printf("[AVINFO] \"%s\" has signature: 0x%s\n", path, hexdigest);
 
   /* Execute the program in a sandbox for demonstration purposes */
-  ret = av_sandbox_create(&s, "sandbox", 0, NULL);
+  ret = av_sandbox_create(&s, "sandbox", NULL);
   if (ret != 0) {
     fprintf(stderr, "[SANDBOX] cannot create sandbox\n");
     goto exit;
