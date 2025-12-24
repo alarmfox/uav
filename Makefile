@@ -1,7 +1,5 @@
-APP     = uav
 BPFTOOL = bpftool
 
-# CC      = gcc
 CFLAGS  = -Wall -Wextra -std=c11
 
 ifeq ($(DEBUG), 1)
@@ -13,22 +11,22 @@ endif
 LDFLAGS = -lcrypto -lzip -lbpf
 
 # Rules
-all: $(APP)
+all: uav
 
-$(APP): uav.o
+uav: uav.o
 	$(CC) $(LDFLAGS) $< -o $@
 
-uuav.o: uuav.c uav.skel.h
+uav.o: uav.c uav.skel.h
 	$(CC) $(CFLAGS) -c $<
 
-vmlinux.h:
-	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
+uav.skel.h: uav.bpf.o
+	$(BPFTOOL) gen skeleton $< name uavbpf > $@
 
 uav.bpf.o: uav.bpf.c vmlinux.h
 	clang -Wall -g -O2 -target bpf -c $< -o $@
 
-uav.skel.h: uav.bpf.o
-	$(BPFTOOL) gen skeleton $< name uavbpf > $@
+vmlinux.h:
+	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 clean:
 	rm -f vmlinux.h $(APP) uav.skel.h *.o
