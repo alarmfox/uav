@@ -1,4 +1,4 @@
-APP     = uav 
+APP     = uav
 BPFTOOL = bpftool
 
 # CC      = gcc
@@ -31,4 +31,4 @@ uav.skel.h: uav.bpf.o
 	$(BPFTOOL) gen skeleton $< name uavbpf > $@
 
 clean:
-	rm -f vmlinux.h $(APP) av.skel.h *.o
+	rm -f vmlinux.h $(APP) uav.skel.h *.o
