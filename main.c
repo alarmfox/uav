@@ -469,62 +469,62 @@ static int create_veth_pair(int nlsock, const char *veth1, const char *veth2) {
   struct rtattr *linkinfo, *infodata, *peerinfo;
   struct ifinfomsg peer_ifi = {0};
   int initial_len;
-  
+
   req.hdr.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
   req.hdr.nlmsg_type = RTM_NEWLINK;
   req.hdr.nlmsg_flags = NLM_F_REQUEST | NLM_F_CREATE | NLM_F_EXCL | NLM_F_ACK;
   req.ifi.ifi_family = AF_UNSPEC;
   req.ifi.ifi_index = 0;
   req.ifi.ifi_change = 0xFFFFFFFF;
-  
+ 
   /* Add interface name (veth1) */
   nl_add_attr(&req.hdr, sizeof(req), IFLA_IFNAME, veth1, strlen(veth1));
-  
+
   /* Start IFLA_LINKINFO */
   linkinfo = (struct rtattr *)(((char*)&req) + NLMSG_ALIGN(req.hdr.nlmsg_len));
   linkinfo->rta_type = IFLA_LINKINFO;
   linkinfo->rta_len = RTA_LENGTH(0);
   initial_len = req.hdr.nlmsg_len;
   req.hdr.nlmsg_len = NLMSG_ALIGN(req.hdr.nlmsg_len) + RTA_SPACE(0);
-  
+
   /* Add IFLA_INFO_KIND = "veth" (nested inside IFLA_LINKINFO) */
   const char *kind = "veth";
   nl_add_attr(&req.hdr, sizeof(req), IFLA_INFO_KIND, kind, strlen(kind));
-  
+
   /* Start IFLA_INFO_DATA (nested inside IFLA_LINKINFO) */
   infodata = (struct rtattr*)(((char*)&req) + NLMSG_ALIGN(req.hdr.nlmsg_len));
   infodata->rta_type = IFLA_INFO_DATA;
   infodata->rta_len = RTA_LENGTH(0);
   int infodata_start = req.hdr.nlmsg_len;
   req.hdr.nlmsg_len = NLMSG_ALIGN(req.hdr.nlmsg_len) + RTA_SPACE(0);
-  
+
   /* Start VETH_INFO_PEER (nested inside IFLA_INFO_DATA) */
   peerinfo = (struct rtattr*)(((char*)&req) + NLMSG_ALIGN(req.hdr.nlmsg_len));
   peerinfo->rta_type = VETH_INFO_PEER;
-  
+
   /* The VETH_INFO_PEER contains a struct ifinfomsg followed by attributes */
   int peer_start = req.hdr.nlmsg_len;
-  
+
   /* Add the struct ifinfomsg for the peer */
   peer_ifi.ifi_family = AF_UNSPEC;
   peerinfo->rta_len = RTA_LENGTH(sizeof(struct ifinfomsg));
   req.hdr.nlmsg_len = NLMSG_ALIGN(req.hdr.nlmsg_len) + RTA_SPACE(sizeof(struct ifinfomsg));
-  
+
   /* Copy the ifinfomsg into the attribute payload */
   memcpy(RTA_DATA(peerinfo), &peer_ifi, sizeof(peer_ifi));
-  
+
   /* Add IFLA_IFNAME for peer (nested inside VETH_INFO_PEER, after ifinfomsg) */
   nl_add_attr(&req.hdr, sizeof(req), IFLA_IFNAME, veth2, strlen(veth2));
-  
+
   /* Fix up VETH_INFO_PEER length */
   peerinfo->rta_len = req.hdr.nlmsg_len - peer_start;
-  
+
   /* Fix up IFLA_INFO_DATA length */
   infodata->rta_len = req.hdr.nlmsg_len - infodata_start;
-  
+
   /* Fix up IFLA_LINKINFO length */
   linkinfo->rta_len = req.hdr.nlmsg_len - initial_len;
-  
+
   return nl_send_and_recv(nlsock, &req.hdr);
 }
 
@@ -708,10 +708,10 @@ static int create_netns(const char *netns) {
 }
 
 /* Set up a virtual ethernet pair. I need to create a veth pair to inspect all networking traffic
- * coming from the sandbox. This happens through netlink messages. The host-side can be configured 
- * immediately, but sandbox-side I need to move this process in the sandbox netns and configure the 
- * pair from there. This implies closing the current netlink socket (as it will be different under the 
- * other netns) and reopening to finish the configuration. The sandbox netns will have a peer veth 
+ * coming from the sandbox. This happens through netlink messages. The host-side can be configured
+ * immediately, but sandbox-side I need to move this process in the sandbox netns and configure the
+ * pair from there. This implies closing the current netlink socket (as it will be different under the
+ * other netns) and reopening to finish the configuration. The sandbox netns will have a peer veth
  * with just a routing rule to send everything to the host side. */
 static int av_sandbox_setup_network(const char *netns) {
 
