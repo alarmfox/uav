@@ -26,24 +26,24 @@
 #include <zip.h>
 
 /* eBPF program */
-#include "av.skel.h"
+#include "uav.skel.h"
 
 /* ======================================== Constants =========================================== */
-static const char MB_SHA256_FILE [] = "data/av_sha256_signatures.txt";
-static const char BUSYBOX_ZIP [] = "data/av_sandbox_busybox.zip";
-static const char SANDBOX_ENTRYPOINT[] = "data/av_sandbox_entrypoint.sh";
-static const char AV_SANDBOX_CGROUP_NAME[] = "av_sandbox";
-static const char AV_SANDBOX_NETNS_NAME[] = "av_sandbox_netns";
+static const char MB_SHA256_FILE [] = "data/uav_sha256_signatures.txt";
+static const char BUSYBOX_ZIP [] = "data/uav_sandbox_busybox.zip";
+static const char SANDBOX_ENTRYPOINT[] = "data/uav_sandbox_entrypoint.sh";
 
 /* =========================================== Types ============================================ */
 #define SHA256_DIGEST_LEN 32
-struct av_context {
+#define MAX_PATH_LEN 256
+struct uav_context {
   /* Each element of the array is a 32 byte digest */
   unsigned char (*signatures)[SHA256_DIGEST_LEN];
   size_t sigcount;
 };
 
-struct av_sandbox_limits {
+/* Limits that can be configured on a single sandbox instance */
+struct uav_sandbox_limits {
   /* Maximum amount of memory that can be used by the sandbox (bytes)*/
   size_t memory_max;
   /* Maximum amount of CPU that can be used by the sandbox (% of a period) */
@@ -53,7 +53,7 @@ struct av_sandbox_limits {
 };
 
 /* Default limits */
-static const struct av_sandbox_limits DEFAULT_LIMITS = {
+static const struct uav_sandbox_limits DEFAULT_LIMITS = {
   /* 128M */
   .memory_max = 1024 * 1024 * 128,
   /* 5% cpu */
@@ -62,12 +62,29 @@ static const struct av_sandbox_limits DEFAULT_LIMITS = {
   .pids_max = 20,
 };
 
-struct av_sandbox {
+struct uav_sandbox_base {
   /* Path of the root filesystem tree */
-  char root[256];
-
-  /* Limits at creation time. This can be overridden when running programs */
-  struct av_sandbox_limits limits;
+  char root[MAX_PATH_LEN];
+  /* If `1` don't need to extract */
+  int initialized;
+};
+  
+/* Per instance sandbox data.*/
+struct uav_sandbox_instance {
+  /* Actual path where runtime data is stored. Overlayfs */
+  char overlay_path[MAX_PATH_LEN];
+  /* Name of the cgroup used by the sandbox */
+  char cgroup_name[64];
+  /* Name of the netns used by the sandbox */
+  char netns[64];
+  /* Name of the veth used by the host */
+  char veth_host[IFNAMSIZ];
+  /* Name of the veth used by the sandbox */
+  char veth_sandbox[IFNAMSIZ];
+  /* Limits to be applied to the sandbox */
+  struct uav_sandbox_limits limits;
+  /* Reference to eBPF program */
+  struct uavbpf *skel;
 };
 
 /* ====================================== Utils =================================================  */
@@ -168,6 +185,46 @@ static int create_cgroup(const char *cgname) {
   return 0;
 }
 
+/* Create a new network namespace. We need to create /var/run/netns directory. Then, we need to 
+ * mount /var/run/netns/<netns> in /proc/self/ns/net to create the new netns. Finally, restore the 
+ * original netns.*/
+static int create_netns(const char *netns) {
+  int original_netnsfd, child_netnsfd, ret;
+  const char netns_path_base[] = "/var/run/netns";
+  char netns_path[512];
+
+  snprintf(netns_path, sizeof(netns_path), "%s/%s", netns_path_base, netns);
+
+  original_netnsfd = open("/proc/self/ns/net", O_RDONLY);
+  if (original_netnsfd < 0) return 1;
+
+  ret = mkdir("/var/run/netns", 0755);
+
+  /* netns already exists is ok */
+  if (ret != 0 && errno != EEXIST)
+    return 1;
+ 
+  /* Create a NEW network namespace by unsharing */
+  if (unshare(CLONE_NEWNET) < 0) return 1;
+
+  child_netnsfd = open(netns_path, O_RDONLY | O_CREAT, 0444);
+  if (child_netnsfd < 0) return 1;
+
+  /* Bind mount the current namespace to the file */
+  if (mount("/proc/self/ns/net", netns_path, "none", MS_BIND, NULL) < 0) {
+    close(child_netnsfd);
+    unlink(netns_path);
+    return 1;
+  }
+
+  /* Close opened file descriptors and restore original netns */
+  setns(original_netnsfd, CLONE_NEWNET);
+  close(child_netnsfd);
+  close(original_netnsfd);
+
+  return 0;
+}
+
 /* The kernel exposes the cgroup ID as stx_ino when querying a cgroup directory. */
 static unsigned long get_cgroup_id(const char *cgname) {
   struct statx stx;
@@ -201,7 +258,7 @@ static int cgroup_add_pid(const char *cgname, pid_t pid) {
 }
 
 /* Set limits (memory, CPU and I/O) to the cgroup */
-static int cgroup_set_limits(const char *cgname, const struct av_sandbox_limits *limits) {
+static int cgroup_set_limits(const char *cgname, const struct uav_sandbox_limits *limits) {
   char path[512];
   int fd, ret;
   char buf[64];
@@ -242,49 +299,77 @@ static int cgroup_set_limits(const char *cgname, const struct av_sandbox_limits 
 
 /* Extract src zip file in output directory */
 static int extract_directory(const char *src, const char *output_path) {
-  int err;
-  zip_t *za = zip_open(src, ZIP_RDONLY, &err);
+  int ret;
+  zip_t *za = zip_open(src, ZIP_RDONLY, &ret);
+  zip_int64_t num_entries, nread;
+  zip_uint8_t opsys;
+  zip_uint32_t attributes;
+  struct zip_stat st;
+  zip_file_t *zf = NULL;
+  FILE *f = NULL;
+  char filepath[512], buf[8 * 1024];
 
   if (!za) {
-    fprintf(stderr, "[SANDBOX] cannot open zip: error %d\n", err);
+    fprintf(stderr, "[SANDBOX] cannot open zip: error %d\n", ret);
     return -1;
   }
  
-  zip_int64_t num_entries = zip_get_num_entries(za, 0);
+  num_entries = zip_get_num_entries(za, 0);
  
   for (zip_int64_t i = 0; i < num_entries; i++) {
     const char *name = zip_get_name(za, i, 0);
     if (!name) continue;
  
-    char filepath[512];
     snprintf(filepath, sizeof(filepath), "%s/%s", output_path, name);
  
-    struct zip_stat st;
+    /* Get stat for the current file */
     zip_stat_index(za, i, 0, &st);
  
-    // Skip directories
+    /* Create directory */
     if (name[strlen(name) - 1] == '/') {
       mkdir(filepath, 0755);
-      continue;
+      /* Skip to permission path */
+      goto perm;
     }
  
-    zip_file_t *zf = zip_fopen_index(za, i, 0);
+    /* Open file in archive */
+    zf = zip_fopen_index(za, i, 0);
     if (!zf) continue;
  
-    FILE *f = fopen(filepath, "wb");
+    /* Open destination file */
+    f = fopen(filepath, "wb");
     if (!f) {
       zip_fclose(zf);
       continue;
     }
  
-    char buf[8192];
-    zip_int64_t nread;
+    /* Extract file byte by byte */
     while ((nread = zip_fread(zf, buf, sizeof(buf))) > 0) {
       fwrite(buf, 1, nread, f);
     }
  
     fclose(f);
     zip_fclose(zf);
+
+perm:
+    /* Retrieve permission and restore them */
+    ret = zip_file_get_external_attributes(za, i, ZIP_FL_UNCHANGED, &opsys, &attributes);
+
+    if(ret){
+      fprintf(stderr, "[ZIP] cannot get permissions for %s\n", filepath);
+      continue;
+    }
+
+    /* Check if permission were for UNIX */
+    if (opsys == ZIP_OPSYS_UNIX ){
+      /* Apply permissions with chmod */
+      ret = chmod(filepath, attributes >> 16);
+      if(ret) fprintf(stderr, "[ZIP] cannot set permissions on %s: %s\n", filepath, strerror(errno));
+
+    } else {
+      fprintf(stderr, "[ZIP] file was not compressed on Unix\n");
+      exit(1);
+    }
   }
  
   zip_close(za);
@@ -376,6 +461,34 @@ cleanup:
   return 0;
 }
 
+/* Create runtime fs for the sandbox starting from `base`. This allows to easily spin up and destroy 
+ * sandbox instances. */
+static int create_overlayfs(const char *base, char *overlay_out) {
+  char upper[MAX_PATH_LEN + 20], work[MAX_PATH_LEN + 20], merged[MAX_PATH_LEN + 20];
+
+  // Create ephemeral directories
+  snprintf(overlay_out, 256, "uav_sandbox_instance_XXXXXX");
+  mkdtemp(overlay_out);
+
+  snprintf(upper, sizeof(upper), "%s/upper", overlay_out);
+  snprintf(work, sizeof(work), "%s/work", overlay_out);
+  snprintf(merged, sizeof(merged), "%s/merged", overlay_out);
+
+  mkdir(upper, 0755);
+  mkdir(work, 0755);
+  mkdir(merged, 0755);
+
+  // Mount overlay: base (lower) + upper (changes) = merged (view)
+  char opts[MAX_PATH_LEN * 3 + 128];
+  snprintf(opts, sizeof(opts), "lowerdir=%s,upperdir=%s,workdir=%s", base, upper, work);
+
+  if (mount("overlay", merged, "overlay", 0, opts) < 0) {
+    fprintf(stderr, "[SANDBOX] overlay mount error %s", strerror(errno));
+    return 1;
+  }
+
+  return 0;
+}
 /* ================================== Netlink utils ====================================== */
 /* Netlink request structures */
 struct nl_req {
@@ -624,98 +737,56 @@ static int add_default_route(int nlsock, const char *gw_ip, const char *ifname) 
 
 /* ===================================== Sandbox ================================================ */
 /* Create sandbox: extract zip directory in base root and copy entrypoint script. */
-static int av_sandbox_create(struct av_sandbox *s, const char *sandbox_dir, const struct av_sandbox_limits *limits) {
+static int uav_sandbox_base_bootstrap(struct uav_sandbox_base *sb, const char *sandbox_dir ) {
   int ret;
 
-  /* if limits is NULL use DEFAULT_LIMITS */
-  const struct av_sandbox_limits *toapply = &DEFAULT_LIMITS;
-  if(limits) {
-    toapply = limits;
-  }
-  memcpy(&s->limits, toapply, sizeof(struct av_sandbox_limits));
-  
-  strncpy(s->root, sandbox_dir, sizeof(s->root) - 1);
-  s->root[sizeof(s->root) - 1] = '\0';
+  /* Save base directory */
+  strncpy(sb->root, sandbox_dir, sizeof(sb->root) - 1);
+  sb->root[sizeof(sb->root) - 1] = '\0';
 
-  // // Create sandbox root directory
-  // ret = mkdir(sandbox_dir, 0755);
-  // if (ret != 0 && errno != EEXIST) {
-  //   fprintf(stderr, "[SANDBOX] cannot create directory %s: %s\n", sandbox_dir, strerror(errno));
-  //   return -1;
-  // }
-  //
-  //
-  // /* Extract busybox zip into sandbox root */
-  // ret = extract_directory(BUSYBOX_ZIP, s->root);
-  // if (ret != 0) {
-  //   fprintf(stderr, "[SANDBOX] cannot extract base sandbox filesystem: %s\n", strerror(errno));
-  //   rmtree(s->root);
-  //   return -1;
-  // }
+  /* Skip if already initialized */
+  if (sb->initialized) return 0;
+
+  // Create sandbox root directory
+  ret = mkdir(sandbox_dir, 0755);
+  if (ret != 0 && errno != EEXIST) {
+    fprintf(stderr, "[SANDBOX] cannot create directory %s: %s\n", sandbox_dir, strerror(errno));
+    return -1;
+  }
+
+  /* Extract busybox zip into sandbox root */
+  ret = extract_directory(BUSYBOX_ZIP, sb->root);
+  if (ret != 0) {
+    fprintf(stderr, "[SANDBOX] cannot extract base sandbox filesystem: %s\n", strerror(errno));
+    rmtree(sb->root);
+    return -1;
+  }
 
   /* Copy entrypoint script */
   char entrypoint_dst[512];
-  snprintf(entrypoint_dst, sizeof(entrypoint_dst), "%s/av_sandbox_entrypoint.sh", s->root);
+  snprintf(entrypoint_dst, sizeof(entrypoint_dst), "%s/uav_sandbox_entrypoint.sh", sb->root);
   ret = copyfile(SANDBOX_ENTRYPOINT, entrypoint_dst);
   if (ret != 0) {
     fprintf(stderr, "[SANDBOX] cannot copy entrypoint: %s\n", strerror(errno));
-    rmtree(s->root);
+    rmtree(sb->root);
     return -1;
   }
+
+  sb->initialized = 1;
 
   /* Make entrypoint executable */
   return chmod(entrypoint_dst, 0755);
 }
 
-static int create_netns(const char *netns) {
-  int original_netnsfd, child_netnsfd, ret;
-  const char netns_path_base[] = "/var/run/netns";
-  char netns_path[512];
-
-  snprintf(netns_path, sizeof(netns_path), "%s/%s", netns_path_base, netns);
-
-  original_netnsfd = open("/proc/self/ns/net", O_RDONLY);
-  if (original_netnsfd < 0) return 1;
-
-  ret = mkdir("/var/run/netns", 0755);
-
-  /* netns already exists */
-  if (ret != 0 && errno != EEXIST)
-    return 1;
- 
-  // Remove if it already exists
-  unlink(netns_path);
-
-  // Create a NEW network namespace by unsharing
-  if (unshare(CLONE_NEWNET) < 0) return 1;
-
-  // Now bind mount the current namespace to the file
-  // First create an empty file
-  child_netnsfd = open(netns_path, O_RDONLY | O_CREAT | O_EXCL, 0444);
-  if (child_netnsfd < 0) return 1;
-
-  // Bind mount /proc/self/ns/net to that file
-  if (mount("/proc/self/ns/net", netns_path, "none", MS_BIND, NULL) < 0) {
-    unlink(netns_path);
-    return 1;
-  }
-
-  setns(original_netnsfd, CLONE_NEWNET);
-  close(child_netnsfd);
-  close(original_netnsfd);
-
-  return 0;
-}
-
-/* Set up a virtual ethernet pair. I need to create a veth pair to inspect all networking traffic
+/* Set up a virtual ethernet pair. We need to create a veth pair to inspect all networking traffic
  * coming from the sandbox. This happens through netlink messages. The host-side can be configured
- * immediately, but sandbox-side I need to move this process in the sandbox netns and configure the
+ * immediately, but sandbox-side we need to move this process in the sandbox netns and configure the
  * pair from there. This implies closing the current netlink socket (as it will be different under the
  * other netns) and reopening to finish the configuration. The sandbox netns will have a peer veth
  * with just a routing rule to send everything to the host side. */
-static int av_sandbox_setup_network(const char *netns) {
+static int uav_sandbox_instance_setup_network(struct uav_sandbox_instance *si) {
 
-  int ret, nlsockfd, original_netnsfd = -1, child_netnsfd = -1;
+  int ret = -1, nlsockfd, original_netnsfd = -1, child_netnsfd = -1;
   struct sockaddr_nl sa = {0};
   const char netns_base_path[] = "/var/run/netns";
   char netns_path[512];
@@ -725,7 +796,7 @@ static int av_sandbox_setup_network(const char *netns) {
   const char veth2_ipv4[] = "10.10.10.2";
   int prefix = 30;
 
-  snprintf(netns_path, sizeof(netns_path), "%s/%s", netns_base_path, netns);
+  snprintf(netns_path, sizeof(netns_path), "%s/%s", netns_base_path, si->netns);
 
   /* Open netlink socket */
   nlsockfd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
@@ -802,116 +873,116 @@ static int av_sandbox_setup_network(const char *netns) {
   /* Go back to original netns */
   ret = setns(original_netnsfd, CLONE_NEWNET);;
   if(ret < 0) goto exit;
+
+  /* Update instance */
+  strncpy(si->veth_host, veth1, strlen(veth1) + 1);
+  strncpy(si->veth_sandbox, veth2, strlen(veth2) + 1);
   ret = 0;
 
 exit:
   if (nlsockfd > 0) close(nlsockfd);
   if(child_netnsfd > 0 ) close(child_netnsfd);
   if(original_netnsfd > 0 ) close(original_netnsfd);
-  if (ret != 0) fprintf(stderr, "[SANDBOX] cannot configure network: %s\n", strerror(errno));
+  if (ret) fprintf(stderr, "[SANDBOX] cannot configure network: %s\n", strerror(errno));
   return ret;
 }
 
-/*
- * Prepare the sandbox before executing a process in it:
- * - move the process in a new cgroup and apply limits to it
- * - move the process in a new netns and forward all traffic to the host for inspection
- * - load and attach the eBPF program
- */
-static int av_sandbox_prepare(const struct av_sandbox *s, const struct av_sandbox_limits *limits, pid_t pid, struct avbpf **skel) {
-
+/* Create an instance of the sandbox. Setup the sandbox with cgroup, netns, limits, load and 
+ * attach eBPF program and create runtime filesystem */
+static int uav_sandbox_instance_create(const struct uav_sandbox_base *sb, const struct uav_sandbox_limits *limits, struct uav_sandbox_instance *si) {
+  static const char cgname[] = "uav_cgroup";
+  static const char netns[] = "uav_netns";
   int ret;
-  unsigned long cgid;
+  unsigned int cgid;
+
+  /* Fallback to default limits */
+  const struct uav_sandbox_limits *toapply = &DEFAULT_LIMITS;
+  if(limits) toapply = limits;
 
   /* Create a new cgroup and apply limits */
-  ret = create_cgroup(AV_SANDBOX_CGROUP_NAME);
+  ret = create_cgroup(cgname);
 
   if(ret) {
     fprintf(stderr, "[SANDBOX] cannot create cgroup: %s\n", strerror(errno));
     return 1;
   }
 
-  ret = cgroup_set_limits(AV_SANDBOX_CGROUP_NAME, &s->limits);
+  ret = cgroup_set_limits(cgname, toapply);
   if(ret) {
     fprintf(stderr, "[SANDBOX] cannot set limits: %s\n", strerror(errno));
     return 1;
   }
 
-  /* Move the child in the new cgroup */
-  ret = cgroup_add_pid(AV_SANDBOX_CGROUP_NAME, pid);
-  if (ret) {
-    fprintf(stderr, "[SANDBOX] cannot move child in cgroup %s\n", AV_SANDBOX_CGROUP_NAME);
-    return 1;
-  }
-
-  /* Apply limits to the new cgroup fallback to default limits if current execution are not specified */
-  const struct av_sandbox_limits *toapply = &s->limits;
-  if(limits != NULL) toapply = limits;
-
-  ret = cgroup_set_limits(AV_SANDBOX_CGROUP_NAME, toapply);
-
-  if (ret) {
-    fprintf(stderr, "[SANDBOX] cannot set limits to cgroup %s\n", AV_SANDBOX_CGROUP_NAME);
-    return 1;
-  }
-
   /* Create a new netns */
-  ret = create_netns(AV_SANDBOX_NETNS_NAME);
+  ret = create_netns(netns);
   if(ret) {
-    fprintf(stderr, "[SANDBOX] cannot create netns %s: %s\n", AV_SANDBOX_NETNS_NAME, strerror(errno));
+    fprintf(stderr, "[SANDBOX] cannot create netns %s: %s\n", netns, strerror(errno));
     return 1;
   }
+  strncpy(si->netns, netns, strlen(netns) + 1);
 
   /* Configure the sandbox networking */
-  ret = av_sandbox_setup_network(AV_SANDBOX_NETNS_NAME);
-
-  /* Move the child in a new pid namespace */
+  ret = uav_sandbox_instance_setup_network(si);
+  if(ret) {
+    fprintf(stderr, "[SANDBOX] cannot create netns %s: %s\n", netns, strerror(errno));
+    return 1;
+  }
+ 
+  /* Mount overlayfs from sandbox base */
+  ret = create_overlayfs(sb->root, si->overlay_path);
+  if(ret) {
+    fprintf(stderr, "[SANDBOX] cannot create overlayfs \n");
+    return 1;
+  }
 
   /* Load and attach eBPF program */
-  cgid = get_cgroup_id(AV_SANDBOX_CGROUP_NAME);
+  cgid = get_cgroup_id(cgname);
   if(cgid == 0) {
     fprintf(stderr, "[SANDBOX] cannot get cgroup id");
     return 1;
   }
-  printf("[SANDBOX] running in cgroup %s (%lu)\n", AV_SANDBOX_CGROUP_NAME, cgid);
 
   /* Load eBPF program */
-  *skel = avbpf__open();
+  si->skel = uavbpf__open();
 
-  if(!skel) {
+  if(!si->skel) {
     fprintf(stderr, "[SANDBOX] cannot open BPF skeleton\n");
     return 1;
   }
 
   /* Initialize constants variables before loading */
-  (*skel)->rodata->target_cgroup_id = cgid;
+  (si->skel)->rodata->target_cgroup_id = cgid;
 
-  ret = avbpf__load(*skel);
+  ret = uavbpf__load(si->skel);
   if(ret) {
     fprintf(stderr, "[SANDBOX] cannot load ebpf program\n");
     return 1;
   }
 
-  ret = avbpf__attach(*skel);
+  ret = uavbpf__attach(si->skel);
   if(ret) {
     fprintf(stderr, "[SANDBOX] cannot attach ebpf program\n");
     return 1;
   }
 
+  /* Save values into sandbox insance */
+  strncpy(si->cgroup_name, cgname, strlen(cgname) + 1);
   printf("[SANDBOX] loaded and attached eBPF program successfully\n");
+
   return 0;
 }
 
-static int av_sandbox_run_program(const struct av_sandbox *s, const char *program, const struct av_sandbox_limits *limits) {
+/* Execute a program in the sandbox instance. The instance must be configured with a call to
+ * uav_sandbox_instance_create */
+static int uav_sandbox_instance_run_program(const struct uav_sandbox_instance *si, const char *program) {
   int pipefd[2];
-  struct avbpf *skel = NULL;
  
   /* Create a communication pipe for child and parent processes */
   if (pipe(pipefd) == -1) {
     fprintf(stderr, "[SANDBOX] cannot create pipe: %s", strerror(errno));
     close(pipefd[0]);
     close(pipefd[1]);
-    goto cleanup;
+    return 1;
   }
 
   pid_t pid = fork();
@@ -919,12 +990,18 @@ static int av_sandbox_run_program(const struct av_sandbox *s, const char *progra
     /* Fork error */
   case -1:
     fprintf(stderr, "[SANDBOX] cannot create process: %s", strerror(errno));
-    goto cleanup;
+    return 1;
     /* Child */
   case 0: {
-      unshare(CLONE_NEWNS | CLONE_NEWNET);
-      int ret = chroot(s->root);
+      /* Chroot into sandbox rootfs */
+      int ret;
       char buf;
+      char path[MAX_PATH_LEN + 64];
+
+      /* The rootfs is in /overlay/merged */
+      snprintf(path, sizeof(path), "%s/merged", si->overlay_path);
+      ret = chroot(path);
+
       /* If cannot chroot exit */
       if(ret)  _exit(1);
       chdir("/");
@@ -932,6 +1009,8 @@ static int av_sandbox_run_program(const struct av_sandbox *s, const char *progra
       /* Close write-side of the pipe */
       ret = close(pipefd[1]);
       if(ret)  _exit(1);
+
+      /* Drop priviledge before executing */
 
       /* Wait to be moved in a new cgroup */
       ssize_t nread = read(pipefd[0], &buf, 1);
@@ -944,9 +1023,10 @@ static int av_sandbox_run_program(const struct av_sandbox *s, const char *progra
       if(ret) _exit(1);
 
       /* Run the suspicious program in it */
-      char * const argv[] = { "/bin/sh", "av_sandbox_entrypoint.sh", program, NULL };
-      execv("/bin/sh", argv);
+      char *const argv[] = { "/bin/sh", "/uav_sandbox_entrypoint.sh", program, NULL };
+      ret = execv("/bin/sh", argv);
 
+      if(ret) fprintf(stderr, "[SANDBOX] Execv failed: %s\n", strerror(errno));
       _exit(EXIT_SUCCESS);
     }
     /* Parent */
@@ -961,13 +1041,17 @@ static int av_sandbox_run_program(const struct av_sandbox *s, const char *progra
         kill(pid, SIGKILL);
       }
 
-      /* Prepare sandbox for execution */
-      ret = av_sandbox_prepare(s, limits, pid, &skel);
+      /* Move pid to sandbox cgroup */
+      ret = cgroup_add_pid(si->cgroup_name, pid);
 
       if (ret) {
         fprintf(stderr, "[SANDBOX] aborting sandbox execution due to previous configuration error\n");
         kill(pid, SIGKILL);
       }
+
+      /* Move pid to sandbox netns */
+
+      /* Move pid to sandbox pidns */
 
       /* Signal that the process can run (for now just send 'X') */
       write(pipefd[1], &tosend, 1);
@@ -992,19 +1076,16 @@ static int av_sandbox_run_program(const struct av_sandbox *s, const char *progra
     }
   }
 
-cleanup:
-  if(skel) avbpf__destroy(skel);
-
   return 0;
 }
 
 /* Copy a file from `src_path` in `dst_name` relative to sandbox */
-static int av_sandbox_copy_file(const struct av_sandbox *s, const char *src_path, const char *dst_name) {
+static int uav_sandbox_instance_copy_file(const struct uav_sandbox_instance *si, const char *src_path, const char *dst_name) {
   char dst_path[512];
   int ret;
  
   // Copy to sandbox root
-  snprintf(dst_path, sizeof(dst_path), "%s/%s", s->root, dst_name);
+  snprintf(dst_path, sizeof(dst_path), "%s/merged/%s", si->overlay_path, dst_name);
  
   ret = copyfile(src_path, dst_path);
   if (ret != 0) {
@@ -1016,18 +1097,31 @@ static int av_sandbox_copy_file(const struct av_sandbox *s, const char *src_path
 }
 
 /* Destroy a sandbox by removing its filesystem tree */
-static void av_sandbox_destroy(const struct av_sandbox *s) {
+static void uav_sandbox_instance_destroy(const struct uav_sandbox_instance *si) {
   int ret;
-  ret = rmtree(s->root);
+  char path[MAX_PATH_LEN + 64];
 
-  if (ret) fprintf(stderr, "[SANDBOX] cannot remove %s: %s\n", s->root, strerror(errno));
+  snprintf(path, sizeof(path), "%s/merged", si->overlay_path);
+
+  /* Umount merge overlayfs */
+  ret = umount(path);
+  if(ret) fprintf(stderr, "[SANDBOX] cannot umount %s: %s\n", si->overlay_path, strerror(errno));
+
+  /* Remove tree */
+  ret = rmtree(si->overlay_path);
+  if(ret) fprintf(stderr, "[SANDBOX] cannot remove tree at %s: %s\n", si->overlay_path, strerror(errno));
+
+  /* Remove netns */
+
+  /* Destroy eBPF program */
+  uavbpf__destroy(si->skel);
 }
 
 /* ===================================== Main functions ========================================== */
 
 /* Initialize av_context struct */
 // TODO: check configuration files signatures
-static int av_init(struct av_context *ctx) {
+static int av_init(struct uav_context *ctx) {
 
   /*
    * Format:
@@ -1089,8 +1183,8 @@ static int av_init(struct av_context *ctx) {
   return 0;
 }
 
-/* Scan a single file */
-static int av_scanfile(const struct av_context *ctx, const char *path, unsigned char *odigest, int *diglen) {
+/* Scan a single file. Compute its hash and compare against signature lists */
+static int av_scanfile(const struct uav_context *ctx, const char *path, unsigned char *odigest, int *diglen) {
   ssize_t len;
   unsigned char digest[256];
   int ismalware = 0;
@@ -1114,7 +1208,7 @@ static int av_scanfile(const struct av_context *ctx, const char *path, unsigned 
   return ismalware;
 }
 
-static void av_context_free(struct av_context *ctx) {
+static void av_context_free(struct uav_context *ctx) {
   if(ctx == NULL || ctx->signatures == NULL) return;
 
   free(ctx->signatures);
@@ -1122,61 +1216,44 @@ static void av_context_free(struct av_context *ctx) {
 
 int main(void) {
   int ret;
-  struct av_sandbox s;
-  static struct av_context ctx = { 0 };
   const char path[] = "sample.sh";
-  const char target_path[] = "/usr/bin/sample.sh";
-  unsigned char digest[SHA256_DIGEST_LEN] = {0};
-  char hexdigest[SHA256_DIGEST_LEN * 2 + 1] = {0};
-  ssize_t digestlen, hexlen;
+  const char target_path[] = "/sample.sh";
+  struct uav_sandbox_base sb = {0};
+  struct uav_sandbox_instance si = {0};
 
-  ret = av_init(&ctx);
+  /* Skip extraction for testing purposes */
+  sb.initialized = 1;
 
-  if(ret) {
-    fprintf(stderr, "cannot init av: (errno=%d) %s\nExiting.\n", errno, strerror(errno));
+  /* Execute the program in a sandbox for demonstration purposes */
+  ret = uav_sandbox_base_bootstrap(&sb, "sandbox");
+  if (ret != 0) {
+    fprintf(stderr, "[SANDBOX] cannot bootstrao sandbox\n");
     exit(1);
   }
 
-  printf("[AVINFO] Loaded %zu signatures\n", ctx.sigcount);
-
-  /* Compute program digest*/
-  FILE *f = fopen(path, "rb");
-  assert(f);
-  digestlen = calculate_sha256_from_file(f, digest);
-  assert(digestlen == SHA256_DIGEST_LEN);
-  fclose(f);
-
-  /* Convert the program digest in hex */
-  hexlen = digest_to_hex(digest, digestlen, hexdigest);
-  assert(hexlen == SHA256_DIGEST_LEN * 2);
-  hexdigest[hexlen] = 0;
-
-  printf("[AVINFO] \"%s\" has signature: 0x%s\n", path, hexdigest);
-
-  /* Execute the program in a sandbox for demonstration purposes */
-  ret = av_sandbox_create(&s, "sandbox", NULL);
+  /* Create ephemeral instance. Use NULL to fallback to default limits */
+  ret = uav_sandbox_instance_create(&sb, NULL, &si);
   if (ret != 0) {
-    fprintf(stderr, "[SANDBOX] cannot create sandbox\n");
-    goto exit;
+    fprintf(stderr, "[SANDBOX] cannot create sandbox instance \n");
+    exit(1);
   }
 
   /* Copy suspicious file in sandbox */
-  ret = av_sandbox_copy_file(&s, path, target_path);
+  ret = uav_sandbox_instance_copy_file(&si, path, target_path);
   if (ret != 0) {
     fprintf(stderr, "[SANDBOX] cannot copy \"%s\" in sandbox: %s\n", path, strerror(errno));
     goto exit;
   }
 
   /* Run the file in sandbox */
-  ret = av_sandbox_run_program(&s, target_path, NULL);
+  ret = uav_sandbox_instance_run_program(&si, target_path);
   if (ret != 0) {
     fprintf(stderr, "[SANDBOX] cannot execute \"%s\" in sandbox: %s\n", target_path, strerror(errno));
     goto exit;
   }
 
 exit:
-  // av_sandbox_destroy(&s);
-  av_context_free(&ctx);
+  uav_sandbox_instance_destroy(&si);
 
   return 0;
 }
