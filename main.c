@@ -1,14 +1,22 @@
 #define _XOPEN_SOURCE 500
 #define _GNU_SOURCE
+#include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <ftw.h>
 #include <linux/stat.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
+#include <linux/sockios.h>
+#include <linux/veth.h>
+#include <net/if.h>
 #include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mount.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -368,6 +376,252 @@ cleanup:
   return 0;
 }
 
+/* ================================== Netlink utils ====================================== */
+/* Netlink request structures */
+struct nl_req {
+  struct nlmsghdr hdr;
+  struct ifinfomsg ifi;
+  char attrbuf[512];
+};
+
+struct nl_addr_req {
+  struct nlmsghdr hdr;
+  struct ifaddrmsg ifa;
+  char attrbuf[128];
+};
+
+struct nl_route_req {
+  struct nlmsghdr hdr;
+  struct rtmsg rt;
+  char attrbuf[256];
+};
+
+/* Helper: add attribute to netlink message */
+static void nl_add_attr(struct nlmsghdr *n, unsigned int maxlen, int type, const void *data, int alen) {
+  int len = RTA_LENGTH(alen);
+  struct rtattr *rta;
+
+  if (NLMSG_ALIGN(n->nlmsg_len) + RTA_ALIGN(len) > maxlen) {
+    fprintf(stderr, "[NETLINK] attribute overflow\n");
+    exit(1);
+    return;
+  }
+
+  rta = (struct rtattr*)(((char*)n) + NLMSG_ALIGN(n->nlmsg_len));
+  rta->rta_type = type;
+  rta->rta_len = len;
+  memcpy(RTA_DATA(rta), data, alen);
+  n->nlmsg_len = NLMSG_ALIGN(n->nlmsg_len) + RTA_ALIGN(len);
+}
+
+/* Send netlink message and wait for ACK */
+static int nl_send_and_recv(int fd, struct nlmsghdr *n) {
+  struct sockaddr_nl nladdr = {0};
+  struct iovec iov = { n, n->nlmsg_len };
+  struct msghdr msg = {
+    .msg_name = &nladdr,
+    .msg_namelen = sizeof(nladdr),
+    .msg_iov = &iov,
+    .msg_iovlen = 1,
+  };
+
+  nladdr.nl_family = AF_NETLINK;
+
+  if (sendmsg(fd, &msg, 0) < 0) {
+    perror("[NETLINK] sendmsg");
+    return -1;
+  }
+
+  /* Receive ACK */
+  char buf[4096];
+  iov.iov_base = buf;
+  iov.iov_len = sizeof(buf);
+
+  int len = recvmsg(fd, &msg, 0);
+  if (len < 0) {
+    perror("[NETLINK] recvmsg");
+    return -1;
+  }
+
+  struct nlmsghdr *h = (struct nlmsghdr*)buf;
+  if (h->nlmsg_type == NLMSG_ERROR) {
+    struct nlmsgerr *err = (struct nlmsgerr*)NLMSG_DATA(h);
+    if (err->error != 0) {
+      fprintf(stderr, "[NETLINK] error: %s\n", strerror(-err->error));
+      return -1;
+    }
+  }
+
+  return 0;
+}
+
+/* Create veth pair. The netlink message should have this structure:
+ * IFLA_IFNAME = peer1
+ * IFLA_LINKINFO
+ *  IFLA_INFO_KIND = "veth"
+ *  IFLA_INFO_DATA
+ *    IFLA_VETH_INFO_PEER
+ *      struct ifinfomsg
+ *      IFLA_IFNAME = peer_name
+ */
+static int create_veth_pair(int nlsock, const char *veth1, const char *veth2) {
+  struct nl_req req = {0};
+  struct rtattr *linkinfo, *infodata, *peerinfo;
+  struct ifinfomsg peer_ifi = {0};
+  int initial_len;
+  
+  req.hdr.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
+  req.hdr.nlmsg_type = RTM_NEWLINK;
+  req.hdr.nlmsg_flags = NLM_F_REQUEST | NLM_F_CREATE | NLM_F_EXCL | NLM_F_ACK;
+  req.ifi.ifi_family = AF_UNSPEC;
+  req.ifi.ifi_index = 0;
+  req.ifi.ifi_change = 0xFFFFFFFF;
+  
+  /* Add interface name (veth1) */
+  nl_add_attr(&req.hdr, sizeof(req), IFLA_IFNAME, veth1, strlen(veth1));
+  
+  /* Start IFLA_LINKINFO */
+  linkinfo = (struct rtattr *)(((char*)&req) + NLMSG_ALIGN(req.hdr.nlmsg_len));
+  linkinfo->rta_type = IFLA_LINKINFO;
+  linkinfo->rta_len = RTA_LENGTH(0);
+  initial_len = req.hdr.nlmsg_len;
+  req.hdr.nlmsg_len = NLMSG_ALIGN(req.hdr.nlmsg_len) + RTA_SPACE(0);
+  
+  /* Add IFLA_INFO_KIND = "veth" (nested inside IFLA_LINKINFO) */
+  const char *kind = "veth";
+  nl_add_attr(&req.hdr, sizeof(req), IFLA_INFO_KIND, kind, strlen(kind));
+  
+  /* Start IFLA_INFO_DATA (nested inside IFLA_LINKINFO) */
+  infodata = (struct rtattr*)(((char*)&req) + NLMSG_ALIGN(req.hdr.nlmsg_len));
+  infodata->rta_type = IFLA_INFO_DATA;
+  infodata->rta_len = RTA_LENGTH(0);
+  int infodata_start = req.hdr.nlmsg_len;
+  req.hdr.nlmsg_len = NLMSG_ALIGN(req.hdr.nlmsg_len) + RTA_SPACE(0);
+  
+  /* Start VETH_INFO_PEER (nested inside IFLA_INFO_DATA) */
+  peerinfo = (struct rtattr*)(((char*)&req) + NLMSG_ALIGN(req.hdr.nlmsg_len));
+  peerinfo->rta_type = VETH_INFO_PEER;
+  
+  /* The VETH_INFO_PEER contains a struct ifinfomsg followed by attributes */
+  int peer_start = req.hdr.nlmsg_len;
+  
+  /* Add the struct ifinfomsg for the peer */
+  peer_ifi.ifi_family = AF_UNSPEC;
+  peerinfo->rta_len = RTA_LENGTH(sizeof(struct ifinfomsg));
+  req.hdr.nlmsg_len = NLMSG_ALIGN(req.hdr.nlmsg_len) + RTA_SPACE(sizeof(struct ifinfomsg));
+  
+  /* Copy the ifinfomsg into the attribute payload */
+  memcpy(RTA_DATA(peerinfo), &peer_ifi, sizeof(peer_ifi));
+  
+  /* Add IFLA_IFNAME for peer (nested inside VETH_INFO_PEER, after ifinfomsg) */
+  nl_add_attr(&req.hdr, sizeof(req), IFLA_IFNAME, veth2, strlen(veth2));
+  
+  /* Fix up VETH_INFO_PEER length */
+  peerinfo->rta_len = req.hdr.nlmsg_len - peer_start;
+  
+  /* Fix up IFLA_INFO_DATA length */
+  infodata->rta_len = req.hdr.nlmsg_len - infodata_start;
+  
+  /* Fix up IFLA_LINKINFO length */
+  linkinfo->rta_len = req.hdr.nlmsg_len - initial_len;
+  
+  return nl_send_and_recv(nlsock, &req.hdr);
+}
+
+/* Set interface UP */
+static int set_link_up(int nlsock, const char *ifname) {
+  struct nl_req req = {0};
+  unsigned int ifindex = if_nametoindex(ifname);
+
+  if (ifindex == 0) return 1;
+
+  req.hdr.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
+  req.hdr.nlmsg_type = RTM_NEWLINK;
+  req.hdr.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+  req.ifi.ifi_family = AF_UNSPEC;
+  req.ifi.ifi_index = ifindex;
+  req.ifi.ifi_flags = IFF_UP;
+  req.ifi.ifi_change = IFF_UP;
+
+  return nl_send_and_recv(nlsock, &req.hdr);
+}
+
+/* Add IP address to interface */
+static int add_ip_addr(int nlsock, const char *ifname, const char *ip, int prefix) {
+  struct nl_addr_req req = {0};
+  unsigned int ifindex = if_nametoindex(ifname);
+  struct in_addr addr;
+  struct in_addr bcast;
+  uint32_t netmask = htonl(0xFFFFFFFF << (32 - prefix));
+
+  if (ifindex == 0) return 1;
+
+  if (inet_pton(AF_INET, ip, &addr) != 1) {
+    fprintf(stderr, "[NETLINK] invalid IP: %s\n", ip);
+    return 1;
+  }
+  bcast.s_addr = addr.s_addr | (~netmask);
+
+  req.hdr.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifaddrmsg));
+  req.hdr.nlmsg_type = RTM_NEWADDR;
+  req.hdr.nlmsg_flags = NLM_F_REQUEST | NLM_F_CREATE | NLM_F_EXCL | NLM_F_ACK;
+  req.ifa.ifa_family = AF_INET;
+  req.ifa.ifa_prefixlen = prefix;
+  req.ifa.ifa_index = ifindex;
+
+  nl_add_attr(&req.hdr, sizeof(req), IFA_LOCAL, &addr, sizeof(addr));
+  nl_add_attr(&req.hdr, sizeof(req), IFA_ADDRESS, &addr, sizeof(addr));
+  nl_add_attr(&req.hdr, sizeof(req), IFA_BROADCAST, &bcast, sizeof(bcast));
+
+  return nl_send_and_recv(nlsock, &req.hdr);
+}
+
+/* Move interface to network namespace */
+static int move_if_to_netns(int nlsock, const char *ifname, int netns_fd) {
+  struct nl_req req = {0};
+  unsigned int ifindex = if_nametoindex(ifname);
+
+  if (ifindex == 0) return 1;
+
+  req.hdr.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
+  req.hdr.nlmsg_type = RTM_SETLINK;
+  req.hdr.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+  req.ifi.ifi_family = AF_UNSPEC;
+  req.ifi.ifi_index = ifindex;
+
+  nl_add_attr(&req.hdr, sizeof(req), IFLA_NET_NS_FD, &netns_fd, sizeof(netns_fd));
+
+  return nl_send_and_recv(nlsock, &req.hdr);
+}
+
+/* Add default route in namespace */
+static int add_default_route(int nlsock, const char *gw_ip, const char *ifname) {
+  struct nl_route_req req = {0};
+  struct in_addr gw;
+  unsigned int ifindex = if_nametoindex(ifname);
+
+  if (ifindex == 0) return 1;
+
+  if (inet_pton(AF_INET, gw_ip, &gw) != 1) {
+    fprintf(stderr, "[NETLINK] invalid gateway IP: %s\n", gw_ip);
+    return 1;
+  }
+
+  req.hdr.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
+  req.hdr.nlmsg_type = RTM_NEWROUTE;
+  req.hdr.nlmsg_flags = NLM_F_REQUEST | NLM_F_CREATE | NLM_F_EXCL | NLM_F_ACK;
+  req.rt.rtm_family = AF_INET;
+  req.rt.rtm_table = RT_TABLE_MAIN;
+  req.rt.rtm_protocol = RTPROT_BOOT;
+  req.rt.rtm_scope = RT_SCOPE_UNIVERSE;
+  req.rt.rtm_type = RTN_UNICAST;
+
+  nl_add_attr(&req.hdr, sizeof(req), RTA_GATEWAY, &gw, sizeof(gw));
+  nl_add_attr(&req.hdr, sizeof(req), RTA_OIF, &ifindex, sizeof(ifindex));
+
+  return nl_send_and_recv(nlsock, &req.hdr);
+}
+
 /* ===================================== Sandbox ================================================ */
 /* Create sandbox: extract zip directory in base root and copy entrypoint script. */
 static int av_sandbox_create(struct av_sandbox *s, const char *sandbox_dir, const struct av_sandbox_limits *limits) {
@@ -379,24 +633,25 @@ static int av_sandbox_create(struct av_sandbox *s, const char *sandbox_dir, cons
     toapply = limits;
   }
   memcpy(&s->limits, toapply, sizeof(struct av_sandbox_limits));
-
-  // Create sandbox root directory
-  ret = mkdir(sandbox_dir, 0755);
-  if (ret != 0 && errno != EEXIST) {
-    fprintf(stderr, "[SANDBOX] cannot create directory %s: %s\n", sandbox_dir, strerror(errno));
-    return -1;
-  }
-
+  
   strncpy(s->root, sandbox_dir, sizeof(s->root) - 1);
   s->root[sizeof(s->root) - 1] = '\0';
- 
-  /* Extract busybox zip into sandbox root */
-  ret = extract_directory(BUSYBOX_ZIP, s->root);
-  if (ret != 0) {
-    fprintf(stderr, "[SANDBOX] cannot extract base sandbox filesystem: %s\n", strerror(errno));
-    rmtree(s->root);
-    return -1;
-  }
+
+  // // Create sandbox root directory
+  // ret = mkdir(sandbox_dir, 0755);
+  // if (ret != 0 && errno != EEXIST) {
+  //   fprintf(stderr, "[SANDBOX] cannot create directory %s: %s\n", sandbox_dir, strerror(errno));
+  //   return -1;
+  // }
+  //
+  //
+  // /* Extract busybox zip into sandbox root */
+  // ret = extract_directory(BUSYBOX_ZIP, s->root);
+  // if (ret != 0) {
+  //   fprintf(stderr, "[SANDBOX] cannot extract base sandbox filesystem: %s\n", strerror(errno));
+  //   rmtree(s->root);
+  //   return -1;
+  // }
 
   /* Copy entrypoint script */
   char entrypoint_dst[512];
@@ -412,38 +667,149 @@ static int av_sandbox_create(struct av_sandbox *s, const char *sandbox_dir, cons
   return chmod(entrypoint_dst, 0755);
 }
 
-static int setup_netns() {
-  int original_netnsfd, child_netnsfd;
+static int create_netns(const char *netns) {
+  int original_netnsfd, child_netnsfd, ret;
+  const char netns_path[] = "/var/run/netns";
+  char path[512];
+
+  snprintf(path, sizeof(path), "%s/%s", netns_path, netns);
 
   original_netnsfd = open("/proc/self/ns/net", O_RDONLY);
-  if (original_netnsfd < 0)
-    handle_error("open original_netnsfd");
+  if (original_netnsfd < 0) return 1;
 
-  if (mkdir("/var/run/netns", 0755) != 0 && errno != EEXIST)
-    handle_error("cannot create /var/run/netns");
+  ret = mkdir("/var/run/netns", 0755);
+
+  /* netns already exists */
+  if (ret != 0 && errno != EEXIST)
+    return 1;
  
   // Remove if it already exists
-  unlink(NETNS_PATH);
+  unlink(path);
 
   // Create a NEW network namespace by unsharing
-  if (unshare(CLONE_NEWNET) < 0)
-    handle_error("unshare");
+  if (unshare(CLONE_NEWNET) < 0) return 1;
 
   // Now bind mount the current namespace to the file
   // First create an empty file
-  child_netnsfd = open(NETNS_PATH, O_RDONLY | O_CREAT | O_EXCL, 0444);
-  if (child_netnsfd < 0)
-    handle_error("open netns file");
+  child_netnsfd = open(path, O_RDONLY | O_CREAT | O_EXCL, 0444);
+  if (child_netnsfd < 0) return 1;
 
   // Bind mount /proc/self/ns/net to that file
-  if (mount("/proc/self/ns/net", NETNS_PATH, "none", MS_BIND, NULL) < 0) {
-    unlink(NETNS_PATH);
-    handle_error("mount netns");
+  if (mount("/proc/self/ns/net", path, "none", MS_BIND, NULL) < 0) {
+    unlink(path);
+    return 1;
   }
 
   setns(original_netnsfd, CLONE_NEWNET);
   close(child_netnsfd);
   close(original_netnsfd);
+
+  return 0;
+}
+
+/* Set up a virtual ethernet pair. I need to create a veth pair to inspect all networking traffic
+ * coming from the sandbox. This happens through netlink messages. The host-side can be configured 
+ * immediately, but sandbox-side I need to move this process in the sandbox netns and configure the 
+ * pair from there. This implies closing the current netlink socket (as it will be different under the 
+ * other netns) and reopening to finish the configuration. The sandbox netns will have a peer veth 
+ * with just a routing rule to send everything to the host side. */
+static int av_sandbox_setup_network(const char *netns) {
+
+  int ret, sockfd, original_netnsfd = -1, child_netnsfd = -1;
+  struct sockaddr_nl sa = {0};
+  const char netns_base_path[] = "/var/run/netns";
+  char netns_path[512];
+  const char veth1[] = "veth1";
+  const char veth2[] = "veth2";
+  const char veth1_ipv4[] = "10.10.10.1";
+  const char veth2_ipv4[] = "10.10.10.2";
+  int prefix = 30;
+
+  snprintf(netns_path, sizeof(netns_path), "%s/%s", netns_base_path, netns);
+
+  /* Open netlink socket */
+  sockfd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+
+  if (sockfd < 0) goto exit;
+
+  sa.nl_family = AF_NETLINK;
+  sa.nl_pid = 0;
+
+  ret = bind(sockfd, (struct sockaddr *)&sa, sizeof(sa));
+  if (ret < 0) goto exit;
+
+  /* Create veth pair */
+  ret = create_veth_pair(sockfd, veth1, veth2);
+  if(ret) goto exit;
+
+  /* Set host-side up */
+  ret = set_link_up(sockfd, veth1);
+  if(ret) goto exit;
+  
+  /* Set host-side up */
+  ret = set_link_up(sockfd, veth2);
+  if(ret) goto exit;
+
+  /* Add an IP address to the host-side. Use just IPv4 for now */
+  ret = add_ip_addr(sockfd, veth1, veth1_ipv4, prefix);
+  if(ret) goto exit;
+
+  /* Move sandbox-side into the netns */
+  child_netnsfd = open(netns_path, O_RDONLY);
+  if (child_netnsfd < 0) {
+    ret = 1;
+    goto exit;
+  }
+
+  ret = move_if_to_netns(sockfd, veth2, child_netnsfd);
+  if(ret) goto exit;
+
+  close(sockfd);
+
+  /* Move ourselves into the sandbox-side netns, but save the current netns so we can come back */
+  original_netnsfd = open("/proc/self/ns/net", O_RDONLY);
+  if (original_netnsfd < 0) {
+    ret = 1;
+    goto exit;
+  }
+
+  ret = setns(child_netnsfd, CLONE_NEWNET);;
+  if(ret < 0) goto exit;
+
+  /* Reopen the socket */
+  sockfd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+
+  if (sockfd < 0) goto exit;
+
+  sa.nl_family = AF_NETLINK;
+  sa.nl_pid = 0;
+
+  ret = bind(sockfd, (struct sockaddr *)&sa, sizeof(sa));
+  if (ret < 0) goto exit;
+  
+  /* Set sandbox-side up */
+  ret = set_link_up(sockfd, veth2);
+  if(ret) goto exit;
+
+  /* Add an IP address to the sandbox-side. Use just IPv4 for now */
+  ret = add_ip_addr(sockfd, veth2, veth2_ipv4, prefix);
+  if(ret) goto exit;
+
+  /* Add default route towards host-side. */
+  ret = add_default_route(sockfd, veth1_ipv4, veth2);
+  if(ret) goto exit;
+
+  /* Go back to original netns */
+  ret = setns(original_netnsfd, CLONE_NEWNET);;
+  if(ret < 0) goto exit;
+  ret = 0;
+
+exit:
+  if (sockfd > 0) close(sockfd);
+  if(child_netnsfd > 0 ) close(child_netnsfd);
+  if(original_netnsfd > 0 ) close(original_netnsfd);
+  if (ret != 0) fprintf(stderr, "[SANDBOX] cannot configure network: %s\n", strerror(errno));
+  return ret;
 }
 
 /*
@@ -474,7 +840,7 @@ static int av_sandbox_prepare(const struct av_sandbox *s, const struct av_sandbo
   /* Move the child in the new cgroup */
   ret = cgroup_add_pid(AV_SANDBOX_CGROUP_NAME, pid);
   if (ret) {
-    fprintf(stderr, "[SANDBOX] cannot move child in cgroup %s, exiting...", AV_SANDBOX_CGROUP_NAME);
+    fprintf(stderr, "[SANDBOX] cannot move child in cgroup %s\n", AV_SANDBOX_CGROUP_NAME);
     return 1;
   }
 
@@ -485,13 +851,19 @@ static int av_sandbox_prepare(const struct av_sandbox *s, const struct av_sandbo
   ret = cgroup_set_limits(AV_SANDBOX_CGROUP_NAME, toapply);
 
   if (ret) {
-    fprintf(stderr, "[SANDBOX] cannot set limits to cgroup %s, exiting...", AV_SANDBOX_CGROUP_NAME);
+    fprintf(stderr, "[SANDBOX] cannot set limits to cgroup %s\n", AV_SANDBOX_CGROUP_NAME);
     return 1;
   }
 
-  /* Move the child in a new netns */
+  /* Create a new netns */
+  ret = create_netns(AV_SANDBOX_NETNS_NAME);
+  if(ret) {
+    fprintf(stderr, "[SANDBOX] cannot create netns %s: %s\n", AV_SANDBOX_NETNS_NAME, strerror(errno));
+    return 1;
+  }
 
-  /* Configure the network namespace with veth pair */
+  /* Configure the sandbox networking */
+  ret = av_sandbox_setup_network(AV_SANDBOX_NETNS_NAME);
 
   /* Setup forwarding */
 
@@ -805,7 +1177,7 @@ int main(void) {
   }
 
 exit:
-  av_sandbox_destroy(&s);
+  // av_sandbox_destroy(&s);
   av_context_free(&ctx);
 
   return 0;
