@@ -465,6 +465,7 @@ cleanup:
 /* Create runtime fs for the sandbox starting from `base`. This allows to easily spin up and destroy 
  * sandbox instances. */
 static int create_overlayfs(const char *base, char *overlay_out) {
+  int ret;
   char upper[MAX_PATH_LEN + 20], work[MAX_PATH_LEN + 20], merged[MAX_PATH_LEN + 20];
 
   // Create ephemeral directories
@@ -483,8 +484,8 @@ static int create_overlayfs(const char *base, char *overlay_out) {
   char opts[MAX_PATH_LEN * 3 + 128];
   snprintf(opts, sizeof(opts), "lowerdir=%s,upperdir=%s,workdir=%s", base, upper, work);
 
-  if (mount("overlay", merged, "overlay", 0, opts) < 0) {
-    fprintf(stderr, "[SANDBOX] overlay mount error %s", strerror(errno));
+  ret = mount("overlay", merged, "overlay", 0, opts);
+  if (ret < 0) {
     return 1;
   }
 
@@ -902,6 +903,39 @@ exit:
   return ret;
 }
 
+/* Setup filesystem: create the overlayfs (the base directory of the instance) and mount /proc and /tmp */
+static int uav_sandbox_setup_filesystem(const struct uav_sandbox_base *sb, struct uav_sandbox_instance *si) {
+
+  int ret;
+  char path[512], options[512];
+
+  /* Mount overlayfs from sandbox base */
+  ret = create_overlayfs(sb->root, si->overlay_path);
+  if(ret) {
+    fprintf(stderr, "[SANDBOX] cannot create overlayfs: %s\n", strerror(errno));
+    return 1;
+  }
+
+  /* Create /tmp and mount tmpfs */
+  snprintf(path, sizeof(path), "%s/merged/tmp", si->overlay_path);
+  ret = mkdir(path, 0755);
+  if(ret) return 1;
+
+  snprintf(options, sizeof(options), "size=%d", 1024 * 1024 * 64);
+  ret = mount("tmpfs", path, "tmpfs", 0, options);
+  if(ret) return 1;
+
+  /* Create /proc and mount procfs */
+  snprintf(path, sizeof(path), "%s/merged/proc", si->overlay_path);
+  ret = mkdir(path, 0755);
+  if(ret) return 1;
+
+  ret = mount("proc", path, "proc", 0, NULL);
+  if(ret) return 1;
+
+  return 0;
+}
+
 /* Create an instance of the sandbox. Setup the sandbox with cgroup, netns, limits, load and 
  * attach eBPF program and create runtime filesystem */
 static int uav_sandbox_instance_create(const struct uav_sandbox_base *sb, const struct uav_sandbox_limits *limits, struct uav_sandbox_instance *si) {
@@ -942,18 +976,17 @@ static int uav_sandbox_instance_create(const struct uav_sandbox_base *sb, const 
     fprintf(stderr, "[SANDBOX] cannot create netns %s: %s\n", netns, strerror(errno));
     return 1;
   }
- 
-  /* Mount overlayfs from sandbox base */
-  ret = create_overlayfs(sb->root, si->overlay_path);
+
+  ret = uav_sandbox_setup_filesystem(sb, si);
   if(ret) {
-    fprintf(stderr, "[SANDBOX] cannot create overlayfs \n");
+    fprintf(stderr, "[SANDBOX] cannot setup filesystem: %s\n", strerror(errno));
     return 1;
   }
 
   /* Load and attach eBPF program */
   cgid = get_cgroup_id(cgname);
   if(cgid == 0) {
-    fprintf(stderr, "[SANDBOX] cannot get cgroup id");
+    fprintf(stderr, "[SANDBOX] cannot get cgroup id\n");
     return 1;
   }
 
@@ -991,6 +1024,8 @@ static int uav_sandbox_instance_create(const struct uav_sandbox_base *sb, const 
  * uav_sandbox_instance_create */
 static int uav_sandbox_instance_run_program(const struct uav_sandbox_instance *si, const char *program) {
   int pipefd[2];
+
+  if(!si) return 1;
  
   /* Create a communication pipe for child and parent processes */
   if (pipe(pipefd) == -1) {
@@ -1143,11 +1178,20 @@ static void uav_sandbox_instance_destroy(const struct uav_sandbox_instance *si) 
   ret = bind(nlsockfd, (struct sockaddr *)&sa, sizeof(sa));
   if (ret < 0) return;
 
-  snprintf(path, sizeof(path), "%s/merged", si->overlay_path);
+  /* Umount procfs */
+  snprintf(path, sizeof(path), "%s/merged/proc", si->overlay_path);
+  ret = umount(path);
+  if(ret) fprintf(stderr, "[SANDBOX] cannot umount %s: %s\n", path, strerror(errno));
+  
+  /* Umount tmpfs */
+  snprintf(path, sizeof(path), "%s/merged/tmp", si->overlay_path);
+  ret = umount(path);
+  if(ret) fprintf(stderr, "[SANDBOX] cannot umount %s: %s\n", path, strerror(errno));
 
   /* Umount merge overlayfs */
+  snprintf(path, sizeof(path), "%s/merged", si->overlay_path);
   ret = umount(path);
-  if(ret) fprintf(stderr, "[SANDBOX] cannot umount %s: %s\n", si->overlay_path, strerror(errno));
+  if(ret) fprintf(stderr, "[SANDBOX] cannot umount %s: %s\n", path, strerror(errno));
 
   /* Remove tree */
   ret = rmtree(si->overlay_path);
