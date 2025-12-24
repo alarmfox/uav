@@ -190,10 +190,9 @@ static int create_cgroup(const char *cgname) {
  * original netns.*/
 static int create_netns(const char *netns) {
   int original_netnsfd, child_netnsfd, ret;
-  const char netns_path_base[] = "/var/run/netns";
   char netns_path[512];
 
-  snprintf(netns_path, sizeof(netns_path), "%s/%s", netns_path_base, netns);
+  snprintf(netns_path, sizeof(netns_path), "/var/run/netns/%s", netns);
 
   original_netnsfd = open("/proc/self/ns/net", O_RDONLY);
   if (original_netnsfd < 0) return 1;
@@ -203,11 +202,13 @@ static int create_netns(const char *netns) {
   /* netns already exists is ok */
   if (ret != 0 && errno != EEXIST)
     return 1;
+
+  unlink(netns_path);
  
   /* Create a NEW network namespace by unsharing */
   if (unshare(CLONE_NEWNET) < 0) return 1;
 
-  child_netnsfd = open(netns_path, O_RDONLY | O_CREAT, 0444);
+  child_netnsfd = open(netns_path, O_RDONLY | O_CREAT | O_EXCL, 0444);
   if (child_netnsfd < 0) return 1;
 
   /* Bind mount the current namespace to the file */
@@ -414,7 +415,7 @@ static int unlink_cb(const char *fpath, const struct stat *sb, int typeflag, str
 
   int rv = remove(fpath);
 
-  if (rv) fprintf(stderr, "cannot remove %s: %s", fpath, strerror(errno));
+  if (rv) fprintf(stderr, "cannot remove %s: %s\n", fpath, strerror(errno));
 
   return rv;
 }
@@ -659,6 +660,21 @@ static int set_link_up(int nlsock, const char *ifname) {
   return nl_send_and_recv(nlsock, &req.hdr);
 }
 
+static int delete_link(int nlsock, const char *ifname) {
+  struct nl_req req = {0};
+  unsigned int ifindex = if_nametoindex(ifname);
+
+  if (ifindex == 0) return 1;
+
+  req.hdr.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
+  req.hdr.nlmsg_type = RTM_DELLINK;
+  req.hdr.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+  req.ifi.ifi_family = AF_UNSPEC;
+  req.ifi.ifi_index = ifindex;
+
+  return nl_send_and_recv(nlsock, &req.hdr);
+}
+
 /* Add IP address to interface */
 static int add_ip_addr(int nlsock, const char *ifname, const char *ip, int prefix) {
   struct nl_addr_req req = {0};
@@ -788,7 +804,6 @@ static int uav_sandbox_instance_setup_network(struct uav_sandbox_instance *si) {
 
   int ret = -1, nlsockfd, original_netnsfd = -1, child_netnsfd = -1;
   struct sockaddr_nl sa = {0};
-  const char netns_base_path[] = "/var/run/netns";
   char netns_path[512];
   const char veth1[] = "veth1";
   const char veth2[] = "veth2";
@@ -796,7 +811,7 @@ static int uav_sandbox_instance_setup_network(struct uav_sandbox_instance *si) {
   const char veth2_ipv4[] = "10.10.10.2";
   int prefix = 30;
 
-  snprintf(netns_path, sizeof(netns_path), "%s/%s", netns_base_path, si->netns);
+  snprintf(netns_path, sizeof(netns_path), "/var/run/netns/%s", si->netns);
 
   /* Open netlink socket */
   nlsockfd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
@@ -1082,15 +1097,30 @@ static int uav_sandbox_instance_run_program(const struct uav_sandbox_instance *s
 /* Copy a file from `src_path` in `dst_name` relative to sandbox */
 static int uav_sandbox_instance_copy_file(const struct uav_sandbox_instance *si, const char *src_path, const char *dst_name) {
   char dst_path[512];
+  struct stat statbuf;
   int ret;
  
-  // Copy to sandbox root
   snprintf(dst_path, sizeof(dst_path), "%s/merged/%s", si->overlay_path, dst_name);
  
+  /* Copy file into sandbox */
   ret = copyfile(src_path, dst_path);
   if (ret != 0) {
     fprintf(stderr, "[SANDBOX] cannot copy file to sandbox: %s\n", strerror(errno));
-    return -1;
+    return 1;
+  }
+
+  /* Get permissions */
+  ret = stat(src_path, &statbuf);
+  if (ret != 0) {
+    fprintf(stderr, "[SANDBOX] cannot stat file: %s\n", strerror(errno));
+    return 1;
+  }
+
+  /* Apply permissions to copied file */
+  ret = chmod(dst_path,  statbuf.st_mode);
+  if (ret != 0) {
+    fprintf(stderr, "[SANDBOX] cannot chmod file: %s\n", strerror(errno));
+    return 1;
   }
  
   return 0;
@@ -1098,8 +1128,20 @@ static int uav_sandbox_instance_copy_file(const struct uav_sandbox_instance *si,
 
 /* Destroy a sandbox by removing its filesystem tree */
 static void uav_sandbox_instance_destroy(const struct uav_sandbox_instance *si) {
-  int ret;
+  int ret, nlsockfd;
+  struct sockaddr_nl sa = {0};
   char path[MAX_PATH_LEN + 64];
+
+  /* Open netlink socket */
+  nlsockfd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+
+  if (nlsockfd < 0) return;
+
+  sa.nl_family = AF_NETLINK;
+  sa.nl_pid = 0;
+
+  ret = bind(nlsockfd, (struct sockaddr *)&sa, sizeof(sa));
+  if (ret < 0) return;
 
   snprintf(path, sizeof(path), "%s/merged", si->overlay_path);
 
@@ -1111,7 +1153,17 @@ static void uav_sandbox_instance_destroy(const struct uav_sandbox_instance *si) 
   ret = rmtree(si->overlay_path);
   if(ret) fprintf(stderr, "[SANDBOX] cannot remove tree at %s: %s\n", si->overlay_path, strerror(errno));
 
+  /* Remove veth host */
+  ret = delete_link(nlsockfd, si->veth_host);
+  if(ret) return;
+
   /* Remove netns */
+  snprintf(path, sizeof(path), "/var/run/netns/%s", si->netns);
+  ret = umount(path);
+  if(ret) fprintf(stderr, "[SANDBOX] cannot umount %s: %s\n", path, strerror(errno));
+
+  ret = unlink(path);
+  if(ret) fprintf(stderr, "[SANDBOX] cannot unlink %s: %s\n", path, strerror(errno));
 
   /* Destroy eBPF program */
   uavbpf__destroy(si->skel);
