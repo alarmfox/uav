@@ -29,4 +29,4 @@ vmlinux.h:
 	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 clean:
-	rm -f vmlinux.h $(APP) uav.skel.h *.o
+	rm -f vmlinux.h uav uav.skel.h *.o
