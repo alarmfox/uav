@@ -669,10 +669,10 @@ static int av_sandbox_create(struct av_sandbox *s, const char *sandbox_dir, cons
 
 static int create_netns(const char *netns) {
   int original_netnsfd, child_netnsfd, ret;
-  const char netns_path[] = "/var/run/netns";
-  char path[512];
+  const char netns_path_base[] = "/var/run/netns";
+  char netns_path[512];
 
-  snprintf(path, sizeof(path), "%s/%s", netns_path, netns);
+  snprintf(netns_path, sizeof(netns_path), "%s/%s", netns_path_base, netns);
 
   original_netnsfd = open("/proc/self/ns/net", O_RDONLY);
   if (original_netnsfd < 0) return 1;
@@ -684,19 +684,19 @@ static int create_netns(const char *netns) {
     return 1;
  
   // Remove if it already exists
-  unlink(path);
+  unlink(netns_path);
 
   // Create a NEW network namespace by unsharing
   if (unshare(CLONE_NEWNET) < 0) return 1;
 
   // Now bind mount the current namespace to the file
   // First create an empty file
-  child_netnsfd = open(path, O_RDONLY | O_CREAT | O_EXCL, 0444);
+  child_netnsfd = open(netns_path, O_RDONLY | O_CREAT | O_EXCL, 0444);
   if (child_netnsfd < 0) return 1;
 
   // Bind mount /proc/self/ns/net to that file
-  if (mount("/proc/self/ns/net", path, "none", MS_BIND, NULL) < 0) {
-    unlink(path);
+  if (mount("/proc/self/ns/net", netns_path, "none", MS_BIND, NULL) < 0) {
+    unlink(netns_path);
     return 1;
   }
 
@@ -715,7 +715,7 @@ static int create_netns(const char *netns) {
  * with just a routing rule to send everything to the host side. */
 static int av_sandbox_setup_network(const char *netns) {
 
-  int ret, sockfd, original_netnsfd = -1, child_netnsfd = -1;
+  int ret, nlsockfd, original_netnsfd = -1, child_netnsfd = -1;
   struct sockaddr_nl sa = {0};
   const char netns_base_path[] = "/var/run/netns";
   char netns_path[512];
@@ -728,30 +728,30 @@ static int av_sandbox_setup_network(const char *netns) {
   snprintf(netns_path, sizeof(netns_path), "%s/%s", netns_base_path, netns);
 
   /* Open netlink socket */
-  sockfd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+  nlsockfd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
 
-  if (sockfd < 0) goto exit;
+  if (nlsockfd < 0) goto exit;
 
   sa.nl_family = AF_NETLINK;
   sa.nl_pid = 0;
 
-  ret = bind(sockfd, (struct sockaddr *)&sa, sizeof(sa));
+  ret = bind(nlsockfd, (struct sockaddr *)&sa, sizeof(sa));
   if (ret < 0) goto exit;
 
   /* Create veth pair */
-  ret = create_veth_pair(sockfd, veth1, veth2);
+  ret = create_veth_pair(nlsockfd, veth1, veth2);
   if(ret) goto exit;
 
   /* Set host-side up */
-  ret = set_link_up(sockfd, veth1);
+  ret = set_link_up(nlsockfd, veth1);
   if(ret) goto exit;
   
   /* Set host-side up */
-  ret = set_link_up(sockfd, veth2);
+  ret = set_link_up(nlsockfd, veth2);
   if(ret) goto exit;
 
   /* Add an IP address to the host-side. Use just IPv4 for now */
-  ret = add_ip_addr(sockfd, veth1, veth1_ipv4, prefix);
+  ret = add_ip_addr(nlsockfd, veth1, veth1_ipv4, prefix);
   if(ret) goto exit;
 
   /* Move sandbox-side into the netns */
@@ -761,10 +761,10 @@ static int av_sandbox_setup_network(const char *netns) {
     goto exit;
   }
 
-  ret = move_if_to_netns(sockfd, veth2, child_netnsfd);
+  ret = move_if_to_netns(nlsockfd, veth2, child_netnsfd);
   if(ret) goto exit;
 
-  close(sockfd);
+  close(nlsockfd);
 
   /* Move ourselves into the sandbox-side netns, but save the current netns so we can come back */
   original_netnsfd = open("/proc/self/ns/net", O_RDONLY);
@@ -777,26 +777,26 @@ static int av_sandbox_setup_network(const char *netns) {
   if(ret < 0) goto exit;
 
   /* Reopen the socket */
-  sockfd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+  nlsockfd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
 
-  if (sockfd < 0) goto exit;
+  if (nlsockfd < 0) goto exit;
 
   sa.nl_family = AF_NETLINK;
   sa.nl_pid = 0;
 
-  ret = bind(sockfd, (struct sockaddr *)&sa, sizeof(sa));
+  ret = bind(nlsockfd, (struct sockaddr *)&sa, sizeof(sa));
   if (ret < 0) goto exit;
   
   /* Set sandbox-side up */
-  ret = set_link_up(sockfd, veth2);
+  ret = set_link_up(nlsockfd, veth2);
   if(ret) goto exit;
 
   /* Add an IP address to the sandbox-side. Use just IPv4 for now */
-  ret = add_ip_addr(sockfd, veth2, veth2_ipv4, prefix);
+  ret = add_ip_addr(nlsockfd, veth2, veth2_ipv4, prefix);
   if(ret) goto exit;
 
   /* Add default route towards host-side. */
-  ret = add_default_route(sockfd, veth1_ipv4, veth2);
+  ret = add_default_route(nlsockfd, veth1_ipv4, veth2);
   if(ret) goto exit;
 
   /* Go back to original netns */
@@ -805,7 +805,7 @@ static int av_sandbox_setup_network(const char *netns) {
   ret = 0;
 
 exit:
-  if (sockfd > 0) close(sockfd);
+  if (nlsockfd > 0) close(nlsockfd);
   if(child_netnsfd > 0 ) close(child_netnsfd);
   if(original_netnsfd > 0 ) close(original_netnsfd);
   if (ret != 0) fprintf(stderr, "[SANDBOX] cannot configure network: %s\n", strerror(errno));
@@ -864,8 +864,6 @@ static int av_sandbox_prepare(const struct av_sandbox *s, const struct av_sandbo
 
   /* Configure the sandbox networking */
   ret = av_sandbox_setup_network(AV_SANDBOX_NETNS_NAME);
-
-  /* Setup forwarding */
 
   /* Move the child in a new pid namespace */
 

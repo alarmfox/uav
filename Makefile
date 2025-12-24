@@ -15,20 +15,20 @@ LDFLAGS = -lcrypto -lzip -lbpf
 # Rules
 all: $(APP)
 
-$(APP): main.o
+$(APP): uav.o
 	$(CC) $(LDFLAGS) $< -o $@
 
-main.o: main.c av.skel.h
+uuav.o: uuav.c uav.skel.h
 	$(CC) $(CFLAGS) -c $<
 
 vmlinux.h:
 	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
 
-av.bpf.o: av.bpf.c vmlinux.h
+uav.bpf.o: uav.bpf.c vmlinux.h
 	clang -Wall -g -O2 -target bpf -c $< -o $@
 
-av.skel.h: av.bpf.o
-	$(BPFTOOL) gen skeleton $< name avbpf > $@
+uav.skel.h: uav.bpf.o
+	$(BPFTOOL) gen skeleton $< name uavbpf > $@
 
 clean:
 	rm -f vmlinux.h $(APP) av.skel.h *.o
