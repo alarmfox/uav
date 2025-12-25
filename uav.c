@@ -50,6 +50,10 @@ struct uav_sandbox_limits {
   size_t cpu_max;
   /* Maximum amount of pids (processes) into the sandbox */
   size_t pids_max;
+  /* Stack size*/
+  size_t stack_size;
+  /* Tmpfs size  */
+  size_t tmpfs_size;
 };
 
 /* Default limits */
@@ -60,6 +64,10 @@ static const struct uav_sandbox_limits DEFAULT_LIMITS = {
   .cpu_max = 5000,
   /* 20 forks */
   .pids_max = 20,
+  /* 1MB stack */
+  .stack_size = 1024 * 1024,
+  /* 16MB tmpfs */
+  .tmpfs_size = 1024 * 1024 * 16,
 };
 
 struct uav_sandbox_base {
@@ -71,12 +79,10 @@ struct uav_sandbox_base {
   
 /* Per instance sandbox data.*/
 struct uav_sandbox_instance {
+  /* Path of the root filesystem tree */
+  char root[MAX_PATH_LEN];
   /* Actual path where runtime data is stored. Overlayfs */
   char overlay_path[MAX_PATH_LEN];
-  /* Name of the cgroup used by the sandbox */
-  char cgroup_name[64];
-  /* Name of the netns used by the sandbox */
-  char netns[64];
   /* Name of the veth used by the host */
   char veth_host[IFNAMSIZ];
   /* Name of the veth used by the sandbox */
@@ -85,6 +91,8 @@ struct uav_sandbox_instance {
   struct uav_sandbox_limits limits;
   /* Reference to eBPF program */
   struct uavbpf *skel;
+  /* Pointer to stack bottom: stack + limits.stack_size = stack_top */
+  unsigned char *stack;
 };
 
 /* ====================================== Utils =================================================  */
@@ -181,47 +189,6 @@ static int create_cgroup(const char *cgname) {
     fprintf(stderr, "[SANDBOX] cannot enable controllers in root\n");
     return ret;
   }
-
-  return 0;
-}
-
-/* Create a new network namespace. We need to create /var/run/netns directory. Then, we need to 
- * mount /var/run/netns/<netns> in /proc/self/ns/net to create the new netns. Finally, restore the 
- * original netns.*/
-static int create_netns(const char *netns) {
-  int original_netnsfd, child_netnsfd, ret;
-  char netns_path[512];
-
-  snprintf(netns_path, sizeof(netns_path), "/var/run/netns/%s", netns);
-
-  original_netnsfd = open("/proc/self/ns/net", O_RDONLY);
-  if (original_netnsfd < 0) return 1;
-
-  ret = mkdir("/var/run/netns", 0755);
-
-  /* netns already exists is ok */
-  if (ret != 0 && errno != EEXIST)
-    return 1;
-
-  unlink(netns_path);
- 
-  /* Create a NEW network namespace by unsharing */
-  if (unshare(CLONE_NEWNET) < 0) return 1;
-
-  child_netnsfd = open(netns_path, O_RDONLY | O_CREAT | O_EXCL, 0444);
-  if (child_netnsfd < 0) return 1;
-
-  /* Bind mount the current namespace to the file */
-  if (mount("/proc/self/ns/net", netns_path, "none", MS_BIND, NULL) < 0) {
-    close(child_netnsfd);
-    unlink(netns_path);
-    return 1;
-  }
-
-  /* Close opened file descriptors and restore original netns */
-  setns(original_netnsfd, CLONE_NEWNET);
-  close(child_netnsfd);
-  close(original_netnsfd);
 
   return 0;
 }
@@ -661,6 +628,7 @@ static int set_link_up(int nlsock, const char *ifname) {
   return nl_send_and_recv(nlsock, &req.hdr);
 }
 
+/* Delete an interface by name */
 static int delete_link(int nlsock, const char *ifname) {
   struct nl_req req = {0};
   unsigned int ifindex = if_nametoindex(ifname);
@@ -801,18 +769,31 @@ static int uav_sandbox_base_bootstrap(struct uav_sandbox_base *sb, const char *s
  * pair from there. This implies closing the current netlink socket (as it will be different under the
  * other netns) and reopening to finish the configuration. The sandbox netns will have a peer veth
  * with just a routing rule to send everything to the host side. */
-static int uav_sandbox_instance_setup_network(struct uav_sandbox_instance *si) {
+static int uav_sandbox_instance_setup_network(struct uav_sandbox_instance *si, pid_t child) {
 
   int ret = -1, nlsockfd, original_netnsfd = -1, child_netnsfd = -1;
   struct sockaddr_nl sa = {0};
-  char netns_path[512];
+  char child_netns_path[512];
   const char veth1[] = "veth1";
   const char veth2[] = "veth2";
   const char veth1_ipv4[] = "10.10.10.1";
   const char veth2_ipv4[] = "10.10.10.2";
   int prefix = 30;
 
-  snprintf(netns_path, sizeof(netns_path), "/var/run/netns/%s", si->netns);
+  /* Get child's network namespace fd */
+  snprintf(child_netns_path, sizeof(child_netns_path), "/proc/%d/ns/net", child);
+  child_netnsfd = open(child_netns_path, O_RDONLY);
+  if (child_netnsfd < 0) {
+    fprintf(stderr, "[PARENT] cannot open child netns: %s\n", strerror(errno));
+    goto exit;
+  }
+
+  /* Save our original netns */
+  original_netnsfd = open("/proc/self/ns/net", O_RDONLY);
+  if (original_netnsfd < 0) {
+    fprintf(stderr, "[PARENT] cannot open original netns: %s\n", strerror(errno));
+    goto exit;
+  }
 
   /* Open netlink socket */
   nlsockfd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
@@ -841,24 +822,11 @@ static int uav_sandbox_instance_setup_network(struct uav_sandbox_instance *si) {
   ret = add_ip_addr(nlsockfd, veth1, veth1_ipv4, prefix);
   if(ret) goto exit;
 
-  /* Move sandbox-side into the netns */
-  child_netnsfd = open(netns_path, O_RDONLY);
-  if (child_netnsfd < 0) {
-    ret = 1;
-    goto exit;
-  }
-
   ret = move_if_to_netns(nlsockfd, veth2, child_netnsfd);
   if(ret) goto exit;
 
+  /* Close netlink socket to reopen it in the new netns */
   close(nlsockfd);
-
-  /* Move ourselves into the sandbox-side netns, but save the current netns so we can come back */
-  original_netnsfd = open("/proc/self/ns/net", O_RDONLY);
-  if (original_netnsfd < 0) {
-    ret = 1;
-    goto exit;
-  }
 
   ret = setns(child_netnsfd, CLONE_NEWNET);;
   if(ret < 0) goto exit;
@@ -904,13 +872,13 @@ exit:
 }
 
 /* Setup filesystem: create the overlayfs (the base directory of the instance) and mount /proc and /tmp */
-static int uav_sandbox_setup_filesystem(const struct uav_sandbox_base *sb, struct uav_sandbox_instance *si) {
+static int uav_sandbox_instance_setup_filesystem(struct uav_sandbox_instance *si) {
 
   int ret;
   char path[512], options[512];
 
   /* Mount overlayfs from sandbox base */
-  ret = create_overlayfs(sb->root, si->overlay_path);
+  ret = create_overlayfs(si->root, si->overlay_path);
   if(ret) {
     fprintf(stderr, "[SANDBOX] cannot create overlayfs: %s\n", strerror(errno));
     return 1;
@@ -936,194 +904,22 @@ static int uav_sandbox_setup_filesystem(const struct uav_sandbox_base *sb, struc
   return 0;
 }
 
-/* Create an instance of the sandbox. Setup the sandbox with cgroup, netns, limits, load and 
- * attach eBPF program and create runtime filesystem */
-static int uav_sandbox_instance_create(const struct uav_sandbox_base *sb, const struct uav_sandbox_limits *limits, struct uav_sandbox_instance *si) {
-  static const char cgname[] = "uav_cgroup";
-  static const char netns[] = "uav_netns";
+/* Configure the sandbox process by limiting its cgroup (applying limits) and configuring networking */
+static int uav_sandbox_instance_configure_process(struct uav_sandbox_instance *si, pid_t child) {
   int ret;
-  unsigned int cgid;
 
-  /* Fallback to default limits */
-  const struct uav_sandbox_limits *toapply = &DEFAULT_LIMITS;
-  if(limits) toapply = limits;
-
-  /* Create a new cgroup and apply limits */
-  ret = create_cgroup(cgname);
-
-  if(ret) {
-    fprintf(stderr, "[SANDBOX] cannot create cgroup: %s\n", strerror(errno));
-    return 1;
-  }
-
-  ret = cgroup_set_limits(cgname, toapply);
-  if(ret) {
-    fprintf(stderr, "[SANDBOX] cannot set limits: %s\n", strerror(errno));
-    return 1;
-  }
-
-  /* Create a new netns */
-  ret = create_netns(netns);
-  if(ret) {
-    fprintf(stderr, "[SANDBOX] cannot create netns %s: %s\n", netns, strerror(errno));
-    return 1;
-  }
-  strncpy(si->netns, netns, strlen(netns) + 1);
-
-  /* Configure the sandbox networking */
-  ret = uav_sandbox_instance_setup_network(si);
-  if(ret) {
-    fprintf(stderr, "[SANDBOX] cannot create netns %s: %s\n", netns, strerror(errno));
-    return 1;
-  }
-
-  ret = uav_sandbox_setup_filesystem(sb, si);
+  /* Setup filesystem */
+  ret = uav_sandbox_instance_setup_filesystem(si);
   if(ret) {
     fprintf(stderr, "[SANDBOX] cannot setup filesystem: %s\n", strerror(errno));
     return 1;
   }
 
-  /* Load and attach eBPF program */
-  cgid = get_cgroup_id(cgname);
-  if(cgid == 0) {
-    fprintf(stderr, "[SANDBOX] cannot get cgroup id\n");
-    return 1;
-  }
+  ret = uav_sandbox_instance_setup_network(si, child);
 
-  /* Load eBPF program */
-  si->skel = uavbpf__open();
-
-  if(!si->skel) {
-    fprintf(stderr, "[SANDBOX] cannot open BPF skeleton\n");
-    return 1;
-  }
-
-  /* Initialize constants variables before loading */
-  (si->skel)->rodata->target_cgroup_id = cgid;
-
-  ret = uavbpf__load(si->skel);
   if(ret) {
-    fprintf(stderr, "[SANDBOX] cannot load ebpf program\n");
+    fprintf(stderr, "[SANDBOX] error during network configuration: %s", strerror(errno));
     return 1;
-  }
-
-  ret = uavbpf__attach(si->skel);
-  if(ret) {
-    fprintf(stderr, "[SANDBOX] cannot attach ebpf program\n");
-    return 1;
-  }
-
-  /* Save values into sandbox insance */
-  strncpy(si->cgroup_name, cgname, strlen(cgname) + 1);
-  printf("[SANDBOX] loaded and attached eBPF program successfully\n");
-
-  return 0;
-}
-
-/* Execute a program in the sandbox instance. The instance must be configured with a call to
- * uav_sandbox_instance_create */
-static int uav_sandbox_instance_run_program(const struct uav_sandbox_instance *si, const char *program) {
-  int pipefd[2];
-
-  if(!si) return 1;
- 
-  /* Create a communication pipe for child and parent processes */
-  if (pipe(pipefd) == -1) {
-    fprintf(stderr, "[SANDBOX] cannot create pipe: %s", strerror(errno));
-    close(pipefd[0]);
-    close(pipefd[1]);
-    return 1;
-  }
-
-  pid_t pid = fork();
-  switch(pid) {
-    /* Fork error */
-  case -1:
-    fprintf(stderr, "[SANDBOX] cannot create process: %s", strerror(errno));
-    return 1;
-    /* Child */
-  case 0: {
-      /* Chroot into sandbox rootfs */
-      int ret;
-      char buf;
-      char path[MAX_PATH_LEN + 64];
-
-      /* The rootfs is in /overlay/merged */
-      snprintf(path, sizeof(path), "%s/merged", si->overlay_path);
-      ret = chroot(path);
-
-      /* If cannot chroot exit */
-      if(ret)  _exit(1);
-      chdir("/");
-
-      /* Close write-side of the pipe */
-      ret = close(pipefd[1]);
-      if(ret)  _exit(1);
-
-      /* Drop priviledge before executing */
-
-      /* Wait to be moved in a new cgroup */
-      ssize_t nread = read(pipefd[0], &buf, 1);
-
-      assert(buf == 'X');
-      assert(nread == 1);
-
-      /* Close read-end of the pipe */
-      ret = close(pipefd[0]);
-      if(ret) _exit(1);
-
-      /* Run the suspicious program in it */
-      char *const argv[] = { "/bin/sh", "/uav_sandbox_entrypoint.sh", program, NULL };
-      ret = execv("/bin/sh", argv);
-
-      if(ret) fprintf(stderr, "[SANDBOX] Execv failed: %s\n", strerror(errno));
-      _exit(EXIT_SUCCESS);
-    }
-    /* Parent */
-  default: {
-      char tosend = 'X';
-      int wstatus, ret;
-
-      /* Ignore read-end */
-      ret = close(pipefd[0]);
-      if (ret) {
-        fprintf(stderr, "[SANDBOX] child cannot close pipe: %s\n", strerror(errno));
-        kill(pid, SIGKILL);
-      }
-
-      /* Move pid to sandbox cgroup */
-      ret = cgroup_add_pid(si->cgroup_name, pid);
-
-      if (ret) {
-        fprintf(stderr, "[SANDBOX] aborting sandbox execution due to previous configuration error\n");
-        kill(pid, SIGKILL);
-      }
-
-      /* Move pid to sandbox netns */
-
-      /* Move pid to sandbox pidns */
-
-      /* Signal that the process can run (for now just send 'X') */
-      write(pipefd[1], &tosend, 1);
-      ret = close(pipefd[1]);
-
-      if(ret) {
-        fprintf(stderr, "[SANDBOX] parent cannot close pipe: %s\n", strerror(errno));
-        kill(pid, SIGKILL);
-      }
-
-      /* Wait for the process to terminate */
-      waitpid(pid, &wstatus, 0);
-      if (WIFEXITED(wstatus)) {
-        fprintf(stderr, "[SANDBOX] process exited status=%d\n", WEXITSTATUS(wstatus));
-      } else if (WIFSIGNALED(wstatus)) {
-        fprintf(stderr, "[SANDBOX] process killed by signal %d\n", WTERMSIG(wstatus));
-      } else if (WIFSTOPPED(wstatus)) {
-        fprintf(stderr, "[SANDBOX] process stopped by signal %d\n", WSTOPSIG(wstatus));
-      } else if (WIFCONTINUED(wstatus)) {
-        fprintf(stderr,"[SANDBOX] process continued\n");
-      }
-    }
   }
 
   return 0;
@@ -1161,8 +957,213 @@ static int uav_sandbox_instance_copy_file(const struct uav_sandbox_instance *si,
   return 0;
 }
 
+struct uav_sandbox_process_args {
+  struct uav_sandbox_instance *si;
+  char program[MAX_PATH_LEN];
+  int pipe_ready[2];
+  int pipe_go[2];
+};
+
+/* Entrypoint process for sandbox */
+static int uav_sandbox_instance_entrypoint(void *args_) {
+  int ret;
+  char c;
+  char path[MAX_PATH_LEN + 64];
+  struct uav_sandbox_process_args *args = args_;
+  const struct uav_sandbox_instance *si = args->si;
+  int *pipe_ready = args->pipe_ready;
+  int *pipe_go = args->pipe_go;
+  ssize_t nbytes;
+
+  /* Close unused pipe ends */
+  if (close(pipe_go[1]) < 0) _exit(1);
+
+  if (close(pipe_ready[0]) < 0)  _exit(1);
+ 
+  /* Signal that sandbox process is ready */
+  c = 'R';
+  nbytes = write(pipe_ready[1], &c, 1 );
+  assert(nbytes == 1);
+
+  /* Wait to for the process to be configured */
+  nbytes = read(pipe_go[0], &c, 1);
+  assert(c == 'X');
+  assert(nbytes == 1);
+
+  /* Close write-side of the pipe */
+  ret = close(pipe_ready[1]);
+  if(ret)  _exit(1);
+
+  /* Close read-side of the pipe */
+  ret = close(pipe_go[0]);
+  if(ret)  _exit(1);
+
+  /* The rootfs is in /overlay/merged chroot into it */
+  snprintf(path, sizeof(path), "%s/merged", si->overlay_path);
+  printf("chrooting on %s\n", path);
+  ret = chroot(path);
+  if(ret) _exit(1);
+
+  /* Change dir to root */
+  ret = chdir("/");
+  if(ret) _exit(1);
+  /* Drop priviledge before executing */
+
+  /* Run the program in the sandbox */
+  printf("Hello world\n");
+  char *const argv[] = { "/bin/sh", "/uav_sandbox_entrypoint.sh", args->program, NULL };
+  execv("/bin/sh", argv);
+
+  /* Execv returns only if there is an error */
+  fprintf(stderr, "[SANDBOX] Execv failed: %s\n", strerror(errno));
+  _exit(1);
+}
+
+/* Execute a program in the sandbox instance. The instance must be configured with a call to
+ * uav_sandbox_instance_create */
+static int uav_sandbox_instance_run_program(struct uav_sandbox_instance *si, const char *program) {
+  int pipe_ready[2], pipe_go[2];
+  int wstatus, ret;
+  pid_t child;
+  ssize_t nbytes;
+  char c;
+  unsigned char *stack_top = NULL;
+  char path[MAX_PATH_LEN + 1];
+
+  if(!si) return 1;
+ 
+  /* Create a communication pipe for child and parent processes */
+  ret = pipe(pipe_ready);
+  if(ret == -1) {
+    fprintf(stderr, "[SANDBOX] cannot create pipe: %s", strerror(errno));
+    close(pipe_ready[0]);
+    close(pipe_ready[1]);
+    return 1;
+  }
+
+  ret = pipe(pipe_go);
+  if(ret == -1) {
+    fprintf(stderr, "[SANDBOX] cannot create pipe: %s", strerror(errno));
+    close(pipe_go[0]);
+    close(pipe_go[1]);
+    return 1;
+  }
+
+  /* Copy default limits */
+  memcpy(&si->limits, &DEFAULT_LIMITS, sizeof(struct uav_sandbox_limits));
+
+  /* Allocate stack for the sandbox */
+  si->stack = malloc(si->limits.stack_size);
+  if(!si->stack) {
+    fprintf(stderr, "[SANDBOX] cannot allocate sandbox stack (size=%zu)", si->limits.stack_size);
+    return 1;
+  }
+
+  stack_top = si->stack + si->limits.stack_size;
+
+  /* Prepare args for uav_sandbox_process_function */
+  struct uav_sandbox_process_args *args = malloc(sizeof(struct uav_sandbox_process_args));
+  if (!args) {
+    return 1;
+  }
+  memset(args, 0, sizeof(struct uav_sandbox_process_args));
+
+  /* 2. Populate the heap-allocated struct */
+  args->si = si;
+  memcpy(args->pipe_ready, pipe_ready, sizeof(int) * 2);
+  memcpy(args->pipe_go, pipe_go, sizeof(int) * 2);
+  strncpy(args->program, program, strlen(program) + 1);
+
+  /* Start child process*/
+  child = clone(uav_sandbox_instance_entrypoint, stack_top,
+      CLONE_NEWNS |
+      CLONE_NEWUTS |
+      CLONE_NEWPID |
+      CLONE_NEWNET |
+      SIGCHLD |
+      CLONE_NEWCGROUP, (void *)args);
+
+  if(child < 0) {
+    fprintf(stderr, "[SANDBOX] cannot create child process: %s\n", strerror(errno));
+    free(args);
+    return 1;
+  }
+
+  /* Close unused pipe */
+  /* Pipe_ready is read only */
+  ret = close(pipe_ready[1]);
+  if (ret) {
+    fprintf(stderr, "[SANDBOX] child cannot close pipe: %s\n", strerror(errno));
+    kill(child, SIGKILL);
+    free(args);
+    return 1;
+  }
+
+  /* Pipe_go is write only */
+  ret = close(pipe_go[0]);
+  if (ret) {
+    fprintf(stderr, "[SANDBOX] child cannot close pipe: %s\n", strerror(errno));
+    kill(child, SIGKILL);
+    free(args);
+    return 1;
+  }
+
+  /* Wait for the process to create. Once created, we can get its cgroup and netns */
+  /* Wait to for the process to be configured */
+  nbytes = read(pipe_ready[0], &c, 1);
+  assert(nbytes == 1);
+  assert(c == 'R');
+
+  /* Configure process */
+  ret = uav_sandbox_instance_configure_process(si, child);
+  if (ret) {
+    fprintf(stderr, "[SANDBOX] aborting sandbox execution due to previous configuration error\n");
+    kill(child, SIGKILL);
+    free(args);
+    return 1;
+  }
+  printf("PARENT %s\n", si->overlay_path);
+ 
+  snprintf(path, sizeof(path), "/%s", program); 
+  ret = uav_sandbox_instance_copy_file(si, program, path);
+  if (ret != 0) {
+    fprintf(stderr, "[SANDBOX] cannot copy \"%s\" in sandbox: %s\n", program, strerror(errno));
+    kill(child, SIGKILL);
+    free(args);
+    return 1;
+  }
+
+  /* Signal that the process can run (for now just send 'X') */
+  c = 'X';;
+  nbytes = write(pipe_go[1], &c, 1);
+  assert(nbytes== 1);
+
+  ret = close(pipe_go[1]);
+  if(ret) {
+    fprintf(stderr, "[SANDBOX] parent cannot close pipe: %s\n", strerror(errno));
+    kill(child, SIGKILL);
+    free(args);
+    return 1;
+  }
+
+  /* Wait for the process to terminate */
+  waitpid(child, &wstatus, 0);
+  if (WIFEXITED(wstatus)) {
+    fprintf(stderr, "[SANDBOX] process exited status=%d\n", WEXITSTATUS(wstatus));
+  } else if (WIFSIGNALED(wstatus)) {
+    fprintf(stderr, "[SANDBOX] process killed by signal %d\n", WTERMSIG(wstatus));
+  } else if (WIFSTOPPED(wstatus)) {
+    fprintf(stderr, "[SANDBOX] process stopped by signal %d\n", WSTOPSIG(wstatus));
+  } else if (WIFCONTINUED(wstatus)) {
+    fprintf(stderr,"[SANDBOX] process continued\n");
+  }
+  free(args);
+
+  return 0;
+}
+
 /* Destroy a sandbox by removing its filesystem tree */
-static void uav_sandbox_instance_destroy(const struct uav_sandbox_instance *si) {
+static void uav_sandbox_instance_destroy(struct uav_sandbox_instance *si) {
   int ret, nlsockfd;
   struct sockaddr_nl sa = {0};
   char path[MAX_PATH_LEN + 64];
@@ -1201,16 +1202,12 @@ static void uav_sandbox_instance_destroy(const struct uav_sandbox_instance *si) 
   ret = delete_link(nlsockfd, si->veth_host);
   if(ret) return;
 
-  /* Remove netns */
-  snprintf(path, sizeof(path), "/var/run/netns/%s", si->netns);
-  ret = umount(path);
-  if(ret) fprintf(stderr, "[SANDBOX] cannot umount %s: %s\n", path, strerror(errno));
-
-  ret = unlink(path);
-  if(ret) fprintf(stderr, "[SANDBOX] cannot unlink %s: %s\n", path, strerror(errno));
-
   /* Destroy eBPF program */
-  uavbpf__destroy(si->skel);
+  if(si->skel) uavbpf__destroy(si->skel);
+
+  /* Remove the stack */
+  if(si->stack) free(si->stack);
+  si->stack = NULL;
 }
 
 /* ===================================== Main functions ========================================== */
@@ -1313,7 +1310,6 @@ static void av_context_free(struct uav_context *ctx) {
 int main(void) {
   int ret;
   const char path[] = "sample.sh";
-  const char target_path[] = "/sample.sh";
   struct uav_sandbox_base sb = {0};
   struct uav_sandbox_instance si = {0};
 
@@ -1327,29 +1323,17 @@ int main(void) {
     exit(1);
   }
 
-  /* Create ephemeral instance. Use NULL to fallback to default limits */
-  ret = uav_sandbox_instance_create(&sb, NULL, &si);
-  if (ret != 0) {
-    fprintf(stderr, "[SANDBOX] cannot create sandbox instance \n");
-    exit(1);
-  }
-
-  /* Copy suspicious file in sandbox */
-  ret = uav_sandbox_instance_copy_file(&si, path, target_path);
-  if (ret != 0) {
-    fprintf(stderr, "[SANDBOX] cannot copy \"%s\" in sandbox: %s\n", path, strerror(errno));
-    goto exit;
-  }
+  strncpy(si.root, sb.root, strlen(sb.root) + 1);
 
   /* Run the file in sandbox */
-  ret = uav_sandbox_instance_run_program(&si, target_path);
+  ret = uav_sandbox_instance_run_program(&si, path);
   if (ret != 0) {
-    fprintf(stderr, "[SANDBOX] cannot execute \"%s\" in sandbox: %s\n", target_path, strerror(errno));
+    fprintf(stderr, "[SANDBOX] cannot execute \"%s\" in sandbox: %s\n", path, strerror(errno));
     goto exit;
   }
 
 exit:
-  uav_sandbox_instance_destroy(&si);
+  // uav_sandbox_instance_destroy(&si);
 
   return 0;
 }
