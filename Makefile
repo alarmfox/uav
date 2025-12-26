@@ -5,7 +5,7 @@ CFLAGS  = -Wall -Wextra -std=c11
 ifeq ($(DEBUG), 1)
 CFLAGS  += -g -O0
 else
-CFLAGS  += -O2
+CFLAGS  += -O2 -Werror
 endif
 
 LDFLAGS = -lcrypto -lzip -lbpf
