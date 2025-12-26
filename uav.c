@@ -785,7 +785,7 @@ static int uav_sandbox_base_bootstrap(struct uav_sandbox *si, const char *sandbo
  * with just a routing rule to send everything to the host side. */
 static int uav_sandbox_setup_network(struct uav_sandbox *s, pid_t child) {
 
-  int ret = -1, nlsockfd, original_netnsfd = -1, child_netnsfd = -1;
+  int ret = -1, nlsockfd = -1, original_netnsfd = -1, child_netnsfd = -1;
   struct sockaddr_nl sa = {0};
   char child_netns_path[512];
 
@@ -1228,7 +1228,13 @@ static int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
     goto send;
   }
 
-  s->skel->rodata->target_cgroup_id = get_cgroup_id("uav-cgroup");
+  cgid = get_cgroup_id("uav-cgroup");
+  if(cgid == 0) {
+    fprintf(stderr, "[SANDBOX] cannot get cgroup id for \"uav-cgroup\"\n");
+    c = 'E';
+    goto send;
+  }
+  s->skel->rodata->target_cgroup_id = cgid;
 
   ret = uavbpf__load(s->skel);
   if(ret) {
@@ -1278,7 +1284,6 @@ send:
 static void uav_sandbox_destroy(struct uav_sandbox *s) {
   int ret, nlsockfd;
   struct sockaddr_nl sa = {0};
-  char path[MAX_PATH_LEN + 64];
 
   /* Open netlink socket */
   nlsockfd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
@@ -1409,7 +1414,6 @@ static void av_context_free(struct uav_context *ctx) {
 int main(void) {
   int ret;
   const char path[] = "sample.sh";
-  unsigned int prefix = 30;
   struct uav_sandbox s = {0};
 
   /* Skip extraction for testing purposes */
