@@ -1102,216 +1102,153 @@ static int uav_sandbox_entrypoint(void *args_) {
 
 /* Execute a program in the sandbox. This includes spawning a new process and attaching the ebpf program */
 static int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
-  int pipe_ready[2], pipe_go[2];
-  int wstatus, ret;
-  pid_t child;
+  int pipe_ready[2] = { -1, -1 };
+  int pipe_go[2]    = { -1, -1 };
+  int wstatus, ret = 1;
+  pid_t child = -1;
   ssize_t nbytes;
-  char c;
+  char c = 'E';
   unsigned int cgid;
-  unsigned char *stack_top = s->stack + s->limits.stack_size;
+  unsigned char *stack_top;
   struct uav_sandbox_entrypoint_args *args = NULL;
 
-  if(!s) return 1;
-
-  /* Create a communication pipe for child and parent processes */
-  ret = pipe(pipe_ready);
-  if(ret == -1) {
-    fprintf(stderr, "[SANDBOX] cannot create pipe: %s", strerror(errno));
+  if (!s)
     return 1;
-  }
+
+  stack_top = s->stack + s->limits.stack_size;
+
+  /* Pipes */
+  ret = pipe(pipe_ready);
+  if (ret < 0)
+    goto cleanup;
 
   ret = pipe(pipe_go);
-  if(ret == -1) {
-    fprintf(stderr, "[SANDBOX] cannot create pipe: %s", strerror(errno));
-    close(pipe_ready[0]);
-    close(pipe_ready[1]);
-    return 1;
-  }
+  if (ret < 0)
+    goto cleanup;
 
-  /* Prepare args for uav_sandbox_process_function */
-  args = malloc(sizeof(struct uav_sandbox_entrypoint_args));
-  if (!args) {
-    fprintf(stderr, "[SANDBOX] out-of-memory error");
-    return 1;
-  }
+  /* Args */
+  args = calloc(1, sizeof(*args));
+  if (!args)
+    goto cleanup;
 
-  memset(args, 0, sizeof(struct uav_sandbox_entrypoint_args));
   args->s = malloc(sizeof(struct uav_sandbox));
-  if (!args->s) {
-    fprintf(stderr, "[SANDBOX] out-of-memory error");
-    return 1;
-  }
-  memcpy(args->s, s, sizeof(struct uav_sandbox));
-  memcpy(args->pipe_ready, pipe_ready, sizeof(int) * 2);
-  memcpy(args->pipe_go, pipe_go, sizeof(int) * 2);
-  strncpy(args->hostprogram, program, strlen(program) + 1);
+  if (!args->s)
+    goto cleanup;
 
-  /* Start child process */
+  memcpy(args->s, s, sizeof(struct uav_sandbox));
+  memcpy(args->pipe_ready, pipe_ready, sizeof(pipe_ready));
+  memcpy(args->pipe_go, pipe_go, sizeof(pipe_go));
+  strncpy(args->hostprogram, program, sizeof(args->hostprogram) - 1);
+
+  /* Clone */
   child = clone(uav_sandbox_entrypoint, stack_top,
       CLONE_NEWNS |
       CLONE_NEWUTS |
       CLONE_NEWPID |
       CLONE_NEWNET |
-      SIGCHLD |
-      CLONE_NEWCGROUP, (void *)args);
+      CLONE_NEWCGROUP |
+      SIGCHLD,
+      args);
 
-  if(child < 0) {
-    fprintf(stderr, "[SANDBOX] cannot create child process: %s\n", strerror(errno));
-    free(args);
-    return 1;
-  }
+  if (child < 0)
+    goto cleanup;
 
-  /* Close unused pipe */
-  /* Pipe_ready is read only */
-  ret = close(pipe_ready[1]);
-  if (ret) {
-    fprintf(stderr, "[SANDBOX] child cannot close pipe: %s\n", strerror(errno));
-    kill(child, SIGKILL);
-    free(args);
-    return 1;
-  }
+  /* Parent-only pipe usage */
+  close(pipe_ready[1]); pipe_ready[1] = -1;
+  close(pipe_go[0]);    pipe_go[0]    = -1;
 
-  /* Pipe_go is write only */
-  ret = close(pipe_go[0]);
-  if (ret) {
-    fprintf(stderr, "[SANDBOX] child cannot close pipe: %s\n", strerror(errno));
-    kill(child, SIGKILL);
-    free(args);
-    return 1;
-  }
+  /* Wait for child readiness */
+  if (read(pipe_ready[0], &c, 1) != 1 || c != 'R')
+    goto cleanup;
 
-  /* Wait for the process to create. Once created, we can get its cgroup and netns */
-  /* Wait to for the process to be configured */
-  nbytes = read(pipe_ready[0], &c, 1);
-  assert(nbytes == 1);
-  assert(c == 'R');
+  close(pipe_ready[0]); pipe_ready[0] = -1;
 
-  c = 'X';
-  /* Configure networking */
+  /* Setup network */
   ret = uav_sandbox_setup_network(s, child);
-  if(ret) {
-    fprintf(stderr, "[SANDBOX] cannot setup networking: %s\n", strerror(errno));
-    c = 'E';
-    goto send;
-  }
+  if (ret)
+    goto cleanup;
 
-  /* Create the cgroup */
+  /* Cgroup */
   ret = create_cgroup("uav-cgroup");
-  if(ret) {
-    fprintf(stderr, "[SANDBOX] cannot create cgroup \"uav-cgroup\": %s\n", strerror(errno));
-    c = 'E';
-    goto send;
-  }
+  if (ret)
+    goto cleanup;
 
-  /* Move the process in the target cgroup */
   ret = cgroup_add_pid("uav-cgroup", child);
-  if(ret) {
-    fprintf(stderr, "[SANDBOX] cannot move child (%d) into cgroup \"uav-cgroup\": %s\n", child, strerror(errno));
-    c = 'E';
-    goto send;
-  }
+  if (ret)
+    goto cleanup;
 
-  /* Apply limits to cgroup */
   ret = cgroup_set_limits("uav-cgroup", &s->limits);
-  if(ret) {
-    fprintf(stderr, "[SANDBOX] cannot apply limits to cgroup \"uav-cgroup\": %s\n", strerror(errno));
-    c = 'E';
-    goto send;
-  }
+  if (ret)
+    goto cleanup;
 
-  /* Load and attach eBPF program */
+  /* eBPF */
   s->skel = uavbpf__open();
-
-  if(!s->skel) {
-    fprintf(stderr, "[SANDBOX] cannot open eBPF program\n");
-    c = 'E';
-    goto send;
-  }
+  if (!s->skel)
+    goto cleanup;
 
   cgid = get_cgroup_id("uav-cgroup");
-  if(cgid == 0) {
-    fprintf(stderr, "[SANDBOX] cannot get cgroup id for \"uav-cgroup\"\n");
-    c = 'E';
-    goto send;
-  }
+  if (!cgid)
+    goto cleanup;
+
   s->skel->rodata->target_cgroup_id = cgid;
 
   ret = uavbpf__load(s->skel);
-  if(ret) {
-    fprintf(stderr, "[SANDBOX] cannot load eBPF program\n");
-    c = 'E';
-    goto send;
-  }
+  if (ret)
+    goto cleanup;
 
   ret = uavbpf__attach(s->skel);
-  if(ret) {
-    fprintf(stderr, "[SANDBOX] cannot attach eBPF program\n");
-    c = 'E';
-    goto send;
+  if (ret)
+    goto cleanup;
+
+  /* Allow child to run */
+  c = 'X';
+  ret = 0;
+
+cleanup:
+  /* Notify child */
+  if (pipe_go[1] != -1) {
+    write(pipe_go[1], &c, 1);
+    close(pipe_go[1]);
   }
 
-send:
-  /* Signal that the process can run (for now just send 'X' or 'E' if there is an error) */
-  nbytes = write(pipe_go[1], &c, 1);
-  assert(nbytes == 1);
+  if (child > 0)
+    waitpid(child, &wstatus, 0);
 
-  ret = close(pipe_go[1]);
-  if(ret) {
-    fprintf(stderr, "[SANDBOX] parent cannot close pipe: %s\n", strerror(errno));
-    kill(child, SIGKILL);
+  if (s->skel) {
+    uavbpf__destroy(s->skel);
+    s->skel = NULL;
+  }
+
+  if (args) {
+    free(args->s);
     free(args);
-    return 1;
   }
 
-  /* Wait for the process to terminate */
-  waitpid(child, &wstatus, 0);
-  if (WIFEXITED(wstatus)) {
-    fprintf(stderr, "[SANDBOX] process exited status=%d\n", WEXITSTATUS(wstatus));
-  } else if (WIFSIGNALED(wstatus)) {
-    fprintf(stderr, "[SANDBOX] process killed by signal %d\n", WTERMSIG(wstatus));
-  } else if (WIFSTOPPED(wstatus)) {
-    fprintf(stderr, "[SANDBOX] process stopped by signal %d\n", WSTOPSIG(wstatus));
-  } else if (WIFCONTINUED(wstatus)) {
-    fprintf(stderr,"[SANDBOX] process continued\n");
-  }
-  /* Free args struct */
-  free(args);
+  if (pipe_ready[0] != -1) close(pipe_ready[0]);
+  if (pipe_ready[1] != -1) close(pipe_ready[1]);
+  if (pipe_go[0]    != -1) close(pipe_go[0]);
+  if (pipe_go[1]    != -1) close(pipe_go[1]);
 
-  return 0;
+  if (ret && child > 0)
+    kill(child, SIGKILL);
+
+  if(ret)
+    fprintf(stderr, "[SANDBOX] error during sandboxed execution: %s\n", strerror(errno));
+
+  return ret;
 }
 
 /* Destroy a sandbox by removing its filesystem tree */
 static void uav_sandbox_destroy(struct uav_sandbox *s) {
-  int ret, nlsockfd;
-  struct sockaddr_nl sa = {0};
-
-  /* Open netlink socket */
-  nlsockfd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
-
-  if (nlsockfd < 0) return;
-
-  sa.nl_family = AF_NETLINK;
-  sa.nl_pid = 0;
-
-  ret = bind(nlsockfd, (struct sockaddr *)&sa, sizeof(sa));
-  if (ret < 0) return;
+  int ret;
 
   /* Remove tree */
   ret = rmtree(s->overlay_path);
   if(ret) fprintf(stderr, "[SANDBOX] cannot remove tree at %s: %s\n", s->overlay_path, strerror(errno));
 
-  /* Remove veth host */
-  ret = delete_link(nlsockfd, s->hostifname);
-  if(ret) return;
-
-  /* Destroy eBPF program */
-  if(s->skel) uavbpf__destroy(s->skel);
-
   /* Remove the stack */
   if(s->stack) free(s->stack);
   s->stack = NULL;
-
-  close(nlsockfd);
 }
 
 /* ===================================== Main functions ========================================== */
