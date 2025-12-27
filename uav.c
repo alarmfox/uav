@@ -1211,8 +1211,21 @@ cleanup:
     close(pipe_go[1]);
   }
 
-  if (child > 0)
+  /* Wait for child to exit */
+  if (child > 0) {
     waitpid(child, &wstatus, 0);
+
+    if (WIFEXITED(wstatus)) {
+      fprintf(stderr, "[SANDBOX] process exited status=%d\n", WEXITSTATUS(wstatus));
+    } else if (WIFSIGNALED(wstatus)) {
+      fprintf(stderr, "[SANDBOX] process killed by signal %d\n", WTERMSIG(wstatus));
+    } else if (WIFSTOPPED(wstatus)) {
+      fprintf(stderr, "[SANDBOX] process stopped by signal %d\n", WSTOPSIG(wstatus));
+    } else if (WIFCONTINUED(wstatus)) {
+      fprintf(stderr,"[SANDBOX] process continued\n");
+    }
+
+  }
 
   if (s->skel) {
     uavbpf__destroy(s->skel);
@@ -1234,16 +1247,6 @@ cleanup:
 
   if(ret)
     fprintf(stderr, "[SANDBOX] error during sandboxed execution: %s\n", strerror(errno));
-
-  if (WIFEXITED(wstatus)) {
-    fprintf(stderr, "[SANDBOX] process exited status=%d\n", WEXITSTATUS(wstatus));
-  } else if (WIFSIGNALED(wstatus)) {
-    fprintf(stderr, "[SANDBOX] process killed by signal %d\n", WTERMSIG(wstatus));
-  } else if (WIFSTOPPED(wstatus)) {
-    fprintf(stderr, "[SANDBOX] process stopped by signal %d\n", WSTOPSIG(wstatus));
-  } else if (WIFCONTINUED(wstatus)) {
-    fprintf(stderr,"[SANDBOX] process continued\n");
-  }
 
   return ret;
 }
