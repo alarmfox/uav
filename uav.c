@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <ftw.h>
+#include <grp.h>
 #include <linux/stat.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
@@ -74,6 +75,8 @@ static const struct uav_sandbox_limits DEFAULT_LIMITS = {
 
 /* Sandbox instance data. */
 struct uav_sandbox {
+  /* Identifier */
+  char id[64];
   /* Path of the root filesystem tree */
   char root[MAX_PATH_LEN];
   /* Actual path where runtime data is stored. Overlayfs */
@@ -463,26 +466,108 @@ static int create_overlayfs(const char *base, const char *overlay_path) {
   int ret;
   char upper[MAX_PATH_LEN + 20], work[MAX_PATH_LEN + 20], merged[MAX_PATH_LEN + 20];
 
-
   snprintf(upper, sizeof(upper), "%s/upper", overlay_path);
   snprintf(work, sizeof(work), "%s/work", overlay_path);
   snprintf(merged, sizeof(merged), "%s/merged", overlay_path);
 
-  mkdir(upper, 0755);
-  mkdir(work, 0755);
-  mkdir(merged, 0755);
+  ret = mkdir(upper, 0755);
+  if(ret) return 1;
+  ret = mkdir(work, 0755);
+  if(ret) return 1;
+  ret = mkdir(merged, 0755);
+  if(ret) return 1;
 
   // Mount overlay: base (lower) + upper (changes) = merged (view)
   char opts[MAX_PATH_LEN * 3 + 128];
   snprintf(opts, sizeof(opts), "lowerdir=%s,upperdir=%s,workdir=%s", base, upper, work);
 
-  ret = mount("overlay", merged, "overlay", 0, opts);
-  if (ret < 0) {
-    return 1;
+  return mount("overlay", merged, "overlay", 0, opts);
+}
+
+/* Retrieve real uid and gid even if running with sudo */
+static int get_realuid(uid_t *uid, gid_t *gid) {
+  if (getuid() != 0) {
+    *uid = getuid();
+    *gid = getgid();
+    return 0;
   }
+
+  const char *sudo_uid = secure_getenv("SUDO_UID");
+  if (sudo_uid == NULL) {
+    printf("environment variable `SUDO_UID` not found\n");
+    return -1;
+  }
+  errno = 0;
+  *uid = (uid_t)strtoll(sudo_uid, NULL, 10);
+  if (errno != 0) {
+    perror("under-/over-flow in converting `SUDO_UID` to integer");
+    return -1;
+  }
+
+  const char *sudo_gid = secure_getenv("SUDO_GID");
+  if (sudo_gid == NULL) {
+    printf("environment variable `SUDO_GID` not found\n");
+    return -1;
+  }
+  errno = 0;
+  *gid = (gid_t)strtoll(sudo_gid, NULL, 10);
+  if (errno != 0) {
+    perror("under-/over-flow in converting `SUDO_GID` to integer");
+    return -1;
+  }
+  return 0;
+}
+
+/* Setup user namespace UID/GID mapping before entering sandbox */
+static int setup_userns_mappings(pid_t pid, uid_t uid, gid_t gid) {
+  char path[256];
+  char mapping[256];
+  int fd;
+
+  /* Write UID mapping: <inside-uid> <outside-uid> <count> */
+  snprintf(path, sizeof(path), "/proc/%d/uid_map", pid);
+  fd = open(path, O_WRONLY);
+  if (fd < 0) {
+    perror("open uid_map");
+    return -1;
+  }
+
+  /* Map UID 0 inside to our UID outside (single user mapping) */
+  snprintf(mapping, sizeof(mapping), "0 %d 1", uid);
+  if (write(fd, mapping, strlen(mapping)) < 0) {
+    perror("write uid_map");
+    close(fd);
+    return -1;
+  }
+  close(fd);
+
+  /* Disable setgroups (required before GID mapping) */
+  snprintf(path, sizeof(path), "/proc/%d/setgroups", pid);
+  fd = open(path, O_WRONLY);
+  if (fd >= 0) {
+    write(fd, "allow", 5);
+    close(fd);
+  }
+
+  /* Write GID mapping */
+  snprintf(path, sizeof(path), "/proc/%d/gid_map", pid);
+  fd = open(path, O_WRONLY);
+  if (fd < 0) {
+    perror("open gid_map");
+    return -1;
+  }
+
+  snprintf(mapping, sizeof(mapping), "0 %d 1", gid);
+  if (write(fd, mapping, strlen(mapping)) < 0) {
+    perror("write gid_map");
+    close(fd);
+    return -1;
+  }
+  close(fd);
 
   return 0;
 }
+
 /* ================================== Netlink utils ====================================== */
 /* Netlink request structures */
 struct nl_req {
@@ -974,8 +1059,19 @@ static int uav_sandbox_copy_file(const struct uav_sandbox *si, const char *src_p
  * later use */
 static int uav_sandbox_configure(struct uav_sandbox *s, const struct uav_sandbox_limits *limits, const struct uav_sandbox_config *config) {
   /* Create the ovelayfs. This creates a unique temporary directory */
-  snprintf(s->overlay_path, MAX_PATH_LEN, "uav_sandbox_XXXXXX");
-  mkdtemp(s->overlay_path);
+  char template[] = "uav_sandbox_XXXXXX";
+  char *p = NULL;
+  size_t len = 0;
+
+  if(mkdtemp(template) == NULL) return 1;
+  if(realpath(template, s->overlay_path) == NULL) return 1;
+
+  /* Retrieve identifier from the string provided by mkdtemp */
+  /* Start from end and go backwards till '_' */
+  p = s->overlay_path + strlen(s->overlay_path);
+  while(*(--p) != '_') len += 1;
+  strncpy(s->id, p + 1, len);
+  s->id[len] = 0;
 
   /* Setup limits fallback to default if NULL is passed */
   const struct uav_sandbox_limits *toapply = &DEFAULT_LIMITS;
@@ -1022,123 +1118,186 @@ static int uav_sandbox_entrypoint(void *args_) {
   const struct uav_sandbox *s = args->s;
   int *pipe_ready = args->pipe_ready;
   int *pipe_go = args->pipe_go;
-  ssize_t nbytes;
+  const char *err_msg = NULL;
 
-  /* Close unused pipe ends */
-  if (close(pipe_go[1]) < 0) _exit(1);
+  /* 1. Sync with Parent */
+  close(pipe_go[1]);
+  close(pipe_ready[0]);
 
-  if (close(pipe_ready[0]) < 0)  _exit(1);
-
-  /* Signal that sandbox process is ready. Parent can attach the eBPF process to this cgroup */
-  c = 'R';
-  nbytes = write(pipe_ready[1], &c, 1 );
-  assert(nbytes == 1);
-
-  /* Wait to for the process to be configured */
-  nbytes = read(pipe_go[0], &c, 1);
-  assert(nbytes == 1);
-
-  /* Error exit */
-  if(c == 'E') _exit(0);
-
-  /* Close write-side of the pipe */
-  ret = close(pipe_ready[1]);
-  if(ret) _exit(1);
-
-  /* Close read-side of the pipe */
-  ret = close(pipe_go[0]);
-  if(ret) _exit(1);
-
-  /* Create the overlayfs for this instance. */
-  ret = uav_sandbox_setup_filesystem(s);
-  if(ret) {
-    fprintf(stderr, "[SANDBOX] cannot setup filesystem: %s\n", strerror(errno));
-    _exit(1);
+  ret = write(pipe_ready[1], "R", 1);
+  if (ret != 1) {
+    err_msg = "write(ready)";
+    goto fail;
   }
 
-  /* Copy target program in our filesystem. This needs to happen after the overlayfs mounting */
-  ret = uav_sandbox_copy_file(s, args->hostprogram, "/malware.sh");
-  if (ret != 0) {
-    fprintf(stderr, "[SANDBOX] cannot copy \"%s\" in sandbox: %s\n", args->hostprogram, strerror(errno));
-    _exit(1);
+  ret = read(pipe_go[0], &c, 1);
+  if (ret != 1) {
+    err_msg = "read(go)";
+    goto fail;
   }
 
-  /* To prevent sandbox breakout use `pivot_root syscall. We need to create a mount point for the oldroot`*/
+  if (c == 'E') _exit(1);
+
+  close(pipe_ready[1]);
+  close(pipe_go[0]);
+
+  /* 2. Prepare paths */
   snprintf(newroot, sizeof(newroot), "%s/merged", s->overlay_path);
   snprintf(oldroot, sizeof(oldroot), "%s/merged/oldroot", s->overlay_path);
 
-  /* Prevent mount propagation to host */
+  /* 3. Setup Mount Namespace Requirements */
+  // Change propagation to private to satisfy pivot_root requirements
   ret = mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL);
-  if (ret) _exit(1);
+  if (ret < 0) {
+    err_msg = "mount(/, MS_PRIVATE)";
+    goto fail;
+  }
 
-  ret = mkdir(oldroot, 755);
-  if(ret) _exit(1);
+  /* CRITICAL: pivot_root requires new_root to be a mount point. 
+   * We bind-mount the directory to itself to ensure this. */
+  ret = mount(newroot, newroot, NULL, MS_BIND | MS_REC, NULL);
+  if (ret < 0) {
+    err_msg = "bind mount newroot";
+    goto fail;
+  }
 
-  /* Chroot into the overlayfs -> runtime data that will be removed with the destroy operation */
+  /* 4. File operations before pivot */
+  ret = uav_sandbox_copy_file(s, args->hostprogram, "/malware.sh");
+  if (ret != 0) {
+    err_msg = "copy malware.sh";
+    goto fail;
+  }
+
+  ret = mkdir(oldroot, 0755);
+  if (ret < 0 && errno != EEXIST) {
+    err_msg = "mkdir oldroot";
+    goto fail;
+  }
+
+  /* 5. The Pivot */
   ret = syscall(SYS_pivot_root, newroot, oldroot);
-  if(ret) _exit(1);
+  if (ret < 0) {
+    err_msg = "pivot_root";
+    goto fail;
+  }
 
-  /* After pivot_root the cwd is corrupted reset it to '/' */
   ret = chdir("/");
-  if(ret) _exit(1);
+  if (ret < 0) {
+    err_msg = "chdir(/)";
+    goto fail;
+  }
 
-  /* Detach and remove oldroot */
+  /* 6. Cleanup Host Links */
+  // MNT_DETACH allows us to unmount even if the FS is busy
   ret = umount2("/oldroot", MNT_DETACH);
-  if(ret) _exit(1);
+  if (ret < 0) {
+    err_msg = "umount2(oldroot)";
+    goto fail;
+  }
 
-  ret = rmtree("/oldroot");
-  if(ret) _exit(1);
+  ret = rmdir("/oldroot");
 
-  /* Drop priviledge before executing */
+  if (ret < 0) {
+    err_msg = "rmdir(oldroot)";
+    goto fail;
+  }
 
-  /* Run the program in the sandbox */
-  char *const argv[] = { "/bin/sh","/uav_sandbox_entrypoint.sh", "/malware.sh", NULL };
+  /* 7. Drop privileges (Set UID/GID to 0 inside namespace -> maps to userid outside) */
+  ret = setresgid(0, 0, 0);
+  if (ret < 0) {
+    err_msg = "setresgid(0, 0, 0)";
+    goto fail;
+  }
+  ret = setresuid(0, 0, 0);
+  if (ret < 0) {
+    err_msg = "setresuid(0, 0, 0)";
+    goto fail;
+  }
+
+  ret = setgroups(0, NULL);
+  if (ret < 0) {
+    err_msg = "setgroups(0, NULL)";
+    goto fail;
+  }
+
+  /* Set hostname */
+  ret = sethostname(s->id, strlen(s->id));
+  if(ret) goto fail;
+
+  /* 8. Execute */
+  char *const argv[] = { "/bin/sh", "/uav_sandbox_entrypoint.sh", "/malware.sh", NULL };
   execv("/bin/sh", argv);
 
-  /* Execv returns only if there is an error */
-  fprintf(stderr, "[SANDBOX] Execv failed: %s\n", strerror(errno));
+  /* Execv only returns on error */
+  err_msg = "execv";
+
+fail:
+  if (err_msg) {
+    fprintf(stderr, "[SANDBOX] cannot start process %s: %s\n", err_msg, strerror(errno));
+  }
   _exit(1);
 }
 
 /* Execute a program in the sandbox. This includes spawning a new process and attaching the ebpf program */
 static int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
+  /* Sanity check */
+  if (!s) return 1;
+
   int pipe_ready[2] = { -1, -1 };
   int pipe_go[2]    = { -1, -1 };
   int wstatus, ret = 1;
   pid_t child = -1;
+  uid_t uid;
+  gid_t gid;
   ssize_t nbytes;
   char c = 'E';
   unsigned int cgid;
-  unsigned char *stack_top;
+  unsigned char *stack_top = s->stack + s->limits.stack_size;
+  char path[MAX_PATH_LEN];
   struct uav_sandbox_entrypoint_args *args = NULL;
-
-  if (!s)
-    return 1;
-
-  stack_top = s->stack + s->limits.stack_size;
 
   /* Pipes */
   ret = pipe(pipe_ready);
-  if (ret < 0)
-    goto cleanup;
+  if (ret < 0) goto cleanup;
 
   ret = pipe(pipe_go);
-  if (ret < 0)
-    goto cleanup;
+  if (ret < 0) goto cleanup;
 
   /* Args */
-  args = calloc(1, sizeof(*args));
-  if (!args)
-    goto cleanup;
+  args = malloc(sizeof(struct uav_sandbox_entrypoint_args));
+  if (!args) goto cleanup;
 
   args->s = malloc(sizeof(struct uav_sandbox));
-  if (!args->s)
-    goto cleanup;
+  if (!args->s) goto cleanup;
 
   memcpy(args->s, s, sizeof(struct uav_sandbox));
   memcpy(args->pipe_ready, pipe_ready, sizeof(pipe_ready));
   memcpy(args->pipe_go, pipe_go, sizeof(pipe_go));
   strncpy(args->hostprogram, program, sizeof(args->hostprogram) - 1);
+
+  /* Create the overlayfs for this instance. */
+  ret = uav_sandbox_setup_filesystem(s);
+  if(ret) goto cleanup;
+
+  /* Give permission to sandbox folders */
+  ret = get_realuid(&uid, &gid);
+  if(ret) goto cleanup;
+
+  printf("[SANDBOX] Mapping root to uid=%u gid=%u\n", uid, gid);
+
+  const char *dirs[] = {
+    "/merged",
+    "/upper",
+    "/work",
+    "/",
+    NULL
+  };
+
+  for(const char **p = dirs; *p != NULL; p++) {
+    snprintf(path, sizeof(path), "%s%s", s->overlay_path, *p);
+    ret = chown(path, uid, gid);
+    if(ret) goto cleanup;
+  }
 
   /* Clone */
   child = clone(uav_sandbox_entrypoint, stack_top,
@@ -1147,62 +1306,59 @@ static int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
       CLONE_NEWPID |
       CLONE_NEWNET |
       CLONE_NEWCGROUP |
+      CLONE_NEWUSER |
       SIGCHLD,
       args);
 
-  if (child < 0)
-    goto cleanup;
+  if (child < 0) goto cleanup;
 
   /* Parent-only pipe usage */
   close(pipe_ready[1]); pipe_ready[1] = -1;
   close(pipe_go[0]);    pipe_go[0]    = -1;
 
   /* Wait for child readiness */
-  if (read(pipe_ready[0], &c, 1) != 1 || c != 'R')
-    goto cleanup;
+  nbytes = read(pipe_ready[0], &c, 1);
+  if (nbytes != 1 || c != 'R') goto cleanup;
 
   close(pipe_ready[0]); pipe_ready[0] = -1;
 
   /* Setup network */
   ret = uav_sandbox_setup_network(s, child);
-  if (ret)
-    goto cleanup;
+  if (ret) goto cleanup;
 
   /* Cgroup */
   ret = create_cgroup("uav-cgroup");
-  if (ret)
-    goto cleanup;
+  if (ret) goto cleanup;
 
   ret = cgroup_add_pid("uav-cgroup", child);
-  if (ret)
-    goto cleanup;
+  if (ret) goto cleanup;
 
   ret = cgroup_set_limits("uav-cgroup", &s->limits);
-  if (ret)
-    goto cleanup;
+  if (ret) goto cleanup;
 
   /* eBPF */
   s->skel = uavbpf__open();
-  if (!s->skel)
-    goto cleanup;
+  if (!s->skel) goto cleanup;
 
   cgid = get_cgroup_id("uav-cgroup");
-  if (!cgid)
-    goto cleanup;
+  if (!cgid) goto cleanup;
 
   s->skel->rodata->target_cgroup_id = cgid;
 
   ret = uavbpf__load(s->skel);
-  if (ret)
-    goto cleanup;
+  if (ret) goto cleanup;
 
   ret = uavbpf__attach(s->skel);
-  if (ret)
-    goto cleanup;
+  if (ret) goto cleanup;
+
+  ret = setup_userns_mappings(child, uid, gid);
+  if (ret) goto cleanup;
 
   /* Allow child to run */
   c = 'X';
   ret = 0;
+
+  printf("[SANDBOX] running process %d\n", child);
 
 cleanup:
   /* Notify child */
@@ -1254,7 +1410,23 @@ cleanup:
 /* Destroy a sandbox by removing its filesystem tree */
 static void uav_sandbox_destroy(struct uav_sandbox *s) {
   int ret;
+  char path[MAX_PATH_LEN + 64];
 
+  const char *dirs[] = {
+    "/merged/dev/pts",
+    "/merged/tmp",
+    "/merged/proc",
+    "/merged/dev",
+    "/merged",
+    NULL
+  };
+
+  for(const char **p = dirs; *p != NULL; p++) {
+    snprintf(path, sizeof(path), "%s%s", s->overlay_path, *p);
+    ret = umount2(path, MNT_FORCE);
+    if(ret) fprintf(stderr, "[SANDBOX] cannot unmount %s: %s\n", path, strerror(errno)); 
+  }
+ 
   /* Remove tree */
   ret = rmtree(s->overlay_path);
   if(ret) fprintf(stderr, "[SANDBOX] cannot remove tree at %s: %s\n", s->overlay_path, strerror(errno));
