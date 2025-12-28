@@ -463,6 +463,11 @@ static int sandbox_entrypoint(void *args_) {
   ret = sethostname(s->id, strlen(s->id));
   if(ret) goto fail;
 
+  ret = mkdir("/etc", 755);
+  if(ret) goto fail;
+
+  write_file_str("/etc/hostname", s->id);
+
   /* 8. Execute */
   char *const argv[] = { "/bin/sh", "/entrypoint.sh", "/malware.sh", NULL };
   execv("/bin/sh", argv);

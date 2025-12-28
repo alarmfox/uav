@@ -73,10 +73,11 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program);
 void uav_sandbox_destroy(struct uav_sandbox *s);
 
 /* Sandbox entrypoint script. */
-static const char entrypoint[] = 
+static const char entrypoint[] =
   "#!/bin/sh\n"
-  "mkdir /home /root /etc\n"
+  "mkdir -p /home /root \n"
   "echo 'root:x:0:0:root:/root:/bin/sh' > /etc/passwd\n"
+  "echo 'nameserver 1.1.1.1' > /etc/resolv.conf\n"
   "export PS1='(\\u@\\h)>' \n"
   "exec $@";
 
