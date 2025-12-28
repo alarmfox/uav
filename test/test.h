@@ -1,5 +1,5 @@
-#ifndef UAV_TEST_H
-#define UAV_TEST_H
+#ifndef __UAV_TEST_H
+#define __UAV_TEST_H
 
 #include <assert.h>
 #include <stdio.h>
@@ -133,4 +133,4 @@ static struct uav_test_statistics stats = {0, 0, 0,0, ""};
       exit(1);                                                                 \
     }                                                                          \
   } while (0)
-#endif // !UAV_TEST_H
+#endif // !__UAV_TEST_H
