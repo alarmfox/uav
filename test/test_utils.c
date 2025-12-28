@@ -75,11 +75,11 @@ int test_digest_roundtrip(void) {
 int main(void) {
   TEST_SUITE("Utils Module");
 
-  RUN_TEST(test_safe_strcpy_normal);
-  RUN_TEST(test_safe_strcpy_truncate);
-  RUN_TEST(test_safe_strcpy_edge_cases);
-  RUN_TEST(test_digest_to_hex);
-  RUN_TEST(test_digest_roundtrip);
+  TEST_RUN(test_safe_strcpy_normal);
+  TEST_RUN(test_safe_strcpy_truncate);
+  TEST_RUN(test_safe_strcpy_edge_cases);
+  TEST_RUN(test_digest_to_hex);
+  TEST_RUN(test_digest_roundtrip);
 
   TEST_REPORT();
 }

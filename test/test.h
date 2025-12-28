@@ -11,10 +11,11 @@ struct uav_test_statistics {
   int total_tests;
   int passed_tests;
   int failed_tests;
+  int skipped_tests;
   const char *current_suite;
 };
 
-static struct uav_test_statistics stats = {0, 0, 0, ""};
+static struct uav_test_statistics stats = {0, 0, 0,0, ""};
 
 // Color codes for output
 #define COLOR_RED "\x1b[31m"
@@ -94,8 +95,15 @@ static struct uav_test_statistics stats = {0, 0, 0, ""};
     return -1;                                                                 \
   } while (0)
 
+#define TEST_SKIP(message)                                                     \
+  do {                                                                         \
+    printf(COLOR_YELLOW "SKIPPED: %s" COLOR_RESET "\n", message);           \
+    stats.skipped_tests++;                                                     \
+    return 0;                                                                  \
+  } while (0)
+
 // Test runner macros
-#define RUN_TEST(test_func)                                                    \
+#define TEST_RUN(test_func)                                                    \
   do {                                                                         \
     if (test_func() != 0) { /* Test already reported failure */                \
     }                                                                          \
@@ -110,6 +118,11 @@ static struct uav_test_statistics stats = {0, 0, 0, ""};
       printf(COLOR_RED "Failed: %d" COLOR_RESET "\n", stats.failed_tests);     \
     } else {                                                                   \
       printf("Failed: 0\n");                                                   \
+    }                                                                          \
+    if (stats.skipped_tests > 0) {                                             \
+      printf(COLOR_YELLOW "Skipped: %d" COLOR_RESET "\n", stats.skipped_tests);\
+    } else {                                                                   \
+      printf("Skipped: 0\n");                                                   \
     }                                                                          \
     printf("\n");                                                              \
     if (stats.failed_tests == 0) {                                             \

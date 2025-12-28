@@ -180,8 +180,6 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   ret = get_realuid(&uid, &gid);
   if(ret) goto cleanup;
 
-  printf("[SANDBOX] Mapping root to uid=%u gid=%u\n", uid, gid);
-
   const char *dirs[] = {
     "/merged",
     "/upper",
@@ -195,6 +193,19 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
     ret = chown(path, uid, gid);
     if(ret) goto cleanup;
   }
+
+  /* Write entrypoint */
+  snprintf(path, sizeof(path), "%s/merged/entrypoint.sh", s->overlay_path);
+  ret = write_file_str(path, entrypoint);
+
+  if(ret) goto cleanup;
+
+  /* Give real user exec permissions on the entrypoint */
+  ret = chown(path, uid, gid);
+  if(ret) goto cleanup;
+
+  ret = chmod(path, S_IRUSR | S_IXUSR);
+  if(ret) goto cleanup;
 
   /* Clone */
   child = clone(sandbox_entrypoint, stack_top,
@@ -270,6 +281,7 @@ cleanup:
 
     if (WIFEXITED(wstatus)) {
       fprintf(stderr, "[SANDBOX] process exited status=%d\n", WEXITSTATUS(wstatus));
+      if(wstatus != 0) ret = 1;
     } else if (WIFSIGNALED(wstatus)) {
       fprintf(stderr, "[SANDBOX] process killed by signal %d\n", WTERMSIG(wstatus));
     } else if (WIFSTOPPED(wstatus)) {
@@ -452,7 +464,7 @@ static int sandbox_entrypoint(void *args_) {
   if(ret) goto fail;
 
   /* 8. Execute */
-  char *const argv[] = { "/bin/sh", "/uav_sandbox_entrypoint.sh", "/malware.sh", NULL };
+  char *const argv[] = { "/bin/sh", "/entrypoint.sh", "/malware.sh", NULL };
   execv("/bin/sh", argv);
 
   /* Execv only returns on error */

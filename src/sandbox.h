@@ -72,4 +72,12 @@ int uav_sandbox_configure(struct uav_sandbox *s, const struct uav_cgroup_limits 
 int uav_sandbox_run_program(struct uav_sandbox *s, const char *program);
 void uav_sandbox_destroy(struct uav_sandbox *s);
 
+/* Sandbox entrypoint script. */
+static const char entrypoint[] = 
+  "#!/bin/sh\n"
+  "mkdir /home /root /etc\n"
+  "echo 'root:x:0:0:root:/root:/bin/sh' > /etc/passwd\n"
+  "export PS1='(\\u@\\h)>' \n"
+  "exec $@";
+
 #endif // !__UAV_SANDBOX_H

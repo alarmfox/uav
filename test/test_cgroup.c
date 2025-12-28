@@ -103,9 +103,9 @@ int main(void) {
     printf(COLOR_YELLOW "Warning: Running as non-root, some tests will be skipped\n" COLOR_RESET);
   }
 
-  RUN_TEST(test_cgroup_create);
-  RUN_TEST(test_cgroup_create_duplicate);
-  RUN_TEST(test_cgroup_add_pid);
+  TEST_RUN(test_cgroup_create);
+  TEST_RUN(test_cgroup_create_duplicate);
+  TEST_RUN(test_cgroup_add_pid);
 
   TEST_REPORT();
 }
