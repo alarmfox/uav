@@ -1,7 +1,9 @@
-#ifndef XRPC_TEST_H
-#define XRPC_TEST_H
+#ifndef UAV_TEST_H
+#define UAV_TEST_H
 
 #include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 // Test statistics
@@ -118,4 +120,4 @@ static struct uav_test_statistics stats = {0, 0, 0, ""};
       exit(1);                                                                 \
     }                                                                          \
   } while (0)
-#endif // !XRPC_TEST_H
+#endif // !UAV_TEST_H
