@@ -2,19 +2,17 @@
 #define XRPC_TEST_H
 
 #include <assert.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 // Test statistics
-struct xrpc_test_statistics {
+struct uav_test_statistics {
   int total_tests;
   int passed_tests;
   int failed_tests;
   const char *current_suite;
 };
 
-static struct xrpc_test_statistics stats = {0, 0, 0, ""};
+static struct uav_test_statistics stats = {0, 0, 0, ""};
 
 // Color codes for output
 #define COLOR_RED "\x1b[31m"
