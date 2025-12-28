@@ -13,6 +13,9 @@ int compare_digest(const unsigned char *a, const unsigned char *b, int len);
 int extract_directory(const char *src, const char *output_path);
 ssize_t calculate_sha256_from_file(FILE *file, unsigned char *digest);
 int copyfile(const char *src, const char *dst);
+int write_file(const char *path, const char *data, size_t len);
+int write_file_str(const char *path, const char *str);
+ssize_t read_file(const char *path, char *buf, size_t size);
 int rmtree(const char *path);
 
 #endif // !__UAV_UTILS_H

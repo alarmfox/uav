@@ -1,12 +1,9 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "sandbox.h"
-
-#include <bpf/libbpf.h>
-#include <openssl/evp.h>
-#include <zip.h>
-
 
 int main(void) {
   int ret;

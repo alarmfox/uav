@@ -3,8 +3,11 @@
 #include <assert.h>
 #include <errno.h>
 #include <ftw.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <string.h>
+#include <string.h>
+#include <unistd.h>
 
 #include <openssl/evp.h>
 #include <zip.h>
@@ -149,7 +152,6 @@ perm:
   return 0;
 }
 
-
 /* Computes SHA256 from a file */
 ssize_t calculate_sha256_from_file(FILE *file, unsigned char *digest) {
 
@@ -233,4 +235,56 @@ cleanup:
   if (fsrc) fclose(fsrc);
   if (fdst) fclose(fdst);
   return 0;
+}
+
+/* Write `data` in `path` */
+int write_file(const char *path, const char *data, size_t len) {
+  int fd, ret = -1;
+  ssize_t written;
+
+  fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) {
+    fprintf(stderr, "[UTILS] cannot open %s: %s\n", path, strerror(errno));
+    return -1;
+  }
+
+  written = write(fd, data, len);
+  if (written < 0 || (size_t)written != len) {
+    fprintf(stderr, "[UTILS] write failed: %s\n", strerror(errno));
+    goto cleanup;
+  }
+
+  ret = 0;
+
+cleanup:
+  close(fd);
+  return ret;
+}
+
+/* Write `str` in `path` */
+int write_file_str(const char *path, const char *str) {
+  return write_file(path, str, strlen(str));
+}
+
+/* Read a file */
+ssize_t read_file(const char *path, char *buf, size_t size) {
+  int fd;
+  ssize_t nread;
+
+  fd = open(path, O_RDONLY);
+  if (fd < 0) {
+    fprintf(stderr, "[UTILS] cannot open %s: %s\n", path, strerror(errno));
+    return -1;
+  }
+
+  nread = read(fd, buf, size - 1);
+  close(fd);
+
+  if (nread < 0) {
+    fprintf(stderr, "[UTILS] read failed: %s\n", strerror(errno));
+    return -1;
+  }
+
+  buf[nread] = '\0';
+  return nread;
 }

@@ -1,4 +1,3 @@
-#include "cgroup.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/stat.h>
@@ -6,6 +5,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#include "cgroup.h"
 
 /* Enable controllers in the parent cgroup so they're available to children */
 static int enable_controllers(const char *parent_cgroup, const char *controllers) {
@@ -55,7 +56,7 @@ int cgroup_create(const char *cgname) {
 }
 
 /* The kernel exposes the cgroup ID as stx_ino when querying a cgroup directory. */
-unsigned long get_cgroup_id(const char *cgname) {
+unsigned long cgroup_getid(const char *cgname) {
   struct statx stx;
   char path[256];
 

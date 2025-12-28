@@ -18,7 +18,7 @@ struct uav_cgroup_limits {
 };
 
 int cgroup_create(const char *cgname);
-unsigned long get_cgroup_id(const char *cgname);
+unsigned long cgroup_getid(const char *cgname);
 int cgroup_add_pid(const char *cgname, pid_t pid);
 int cgroup_set_limits(const char *cgname, const struct uav_cgroup_limits *limits);
 

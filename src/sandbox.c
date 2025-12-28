@@ -24,7 +24,7 @@ struct uav_sandbox_entrypoint_args {
   /* Pointer to configured uav_sandbox */
   struct uav_sandbox *s;
   /* Path of the program to execute host-side */
-  char hostprogram[MAX_PATH_LEN];
+  char hostprogram[PATH_MAX];
   /* Communication pipes */
   int pipe_ready[2];
   int pipe_go[2];
@@ -150,7 +150,7 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   char c = 'E';
   unsigned int cgid;
   unsigned char *stack_top = s->stack + s->limits.stack_size;
-  char path[MAX_PATH_LEN];
+  char path[PATH_MAX];
   struct uav_sandbox_entrypoint_args *args = NULL;
 
   /* Pipes */
@@ -237,7 +237,7 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   s->skel = uavbpf__open();
   if (!s->skel) goto cleanup;
 
-  cgid = get_cgroup_id("uav-cgroup");
+  cgid = cgroup_getid("uav-cgroup");
   if (!cgid) goto cleanup;
 
   s->skel->rodata->target_cgroup_id = cgid;
@@ -307,7 +307,7 @@ cleanup:
 /* Destroy a sandbox by removing its filesystem tree */
 void uav_sandbox_destroy(struct uav_sandbox *s) {
   int ret;
-  char path[MAX_PATH_LEN + 64];
+  char path[PATH_MAX];
 
   const char *dirs[] = {
     "/merged/dev/pts",
@@ -340,7 +340,7 @@ void uav_sandbox_destroy(struct uav_sandbox *s) {
 static int sandbox_entrypoint(void *args_) {
   int ret;
   char c;
-  char newroot[MAX_PATH_LEN + 64], oldroot[MAX_PATH_LEN + 64];
+  char newroot[PATH_MAX], oldroot[PATH_MAX];
   struct uav_sandbox_entrypoint_args *args = args_;
   const struct uav_sandbox *s = args->s;
   int *pipe_ready = args->pipe_ready;
@@ -475,20 +475,20 @@ static int setup_network(struct uav_sandbox *s, pid_t child) {
 
   int ret = -1, nlsockfd = -1, original_netnsfd = -1, child_netnsfd = -1;
   struct sockaddr_nl sa = {0};
-  char child_netns_path[512];
+  char child_netns_path[PATH_MAX];
 
   /* Get child's network namespace fd */
   snprintf(child_netns_path, sizeof(child_netns_path), "/proc/%d/ns/net", child);
   child_netnsfd = open(child_netns_path, O_RDONLY);
   if (child_netnsfd < 0) {
-    fprintf(stderr, "[PARENT] cannot open child netns: %s\n", strerror(errno));
+    fprintf(stderr, "[SANDBOX] cannot open child netns: %s\n", strerror(errno));
     goto exit;
   }
 
   /* Save our original netns */
   original_netnsfd = open("/proc/self/ns/net", O_RDONLY);
   if (original_netnsfd < 0) {
-    fprintf(stderr, "[PARENT] cannot open original netns: %s\n", strerror(errno));
+    fprintf(stderr, "[SANDBOX] cannot open original netns: %s\n", strerror(errno));
     goto exit;
   }
 
@@ -567,7 +567,7 @@ exit:
 /* Setup filesystem: create the overlayfs (the base directory of the running instance) and mount /proc and /tmp */
 static int setup_filesystem(const struct uav_sandbox *s) {
   int ret;
-  char path[512], options[512];
+  char path[PATH_MAX], options[256];
 
   /* Mount overlayfs from sandbox base */
   ret = create_overlayfs(s->root, s->overlay_path);
@@ -627,7 +627,7 @@ static int setup_filesystem(const struct uav_sandbox *s) {
 
 /* Copy a file from `src_path` in `dst_name` (preserving permissions) relative to sandbox */
 static int sandbox_copyfile(const struct uav_sandbox *si, const char *src_path, const char *dst_name) {
-  char dst_path[512];
+  char dst_path[PATH_MAX];
   struct stat statbuf;
   int ret;
 
@@ -660,25 +660,86 @@ static int sandbox_copyfile(const struct uav_sandbox *si, const char *src_path, 
 /* Create runtime fs for the sandbox starting from `base`. This allows to easily spin up and destroy 
  * sandbox s. */
 static int create_overlayfs(const char *base, const char *overlay_path) {
-  int ret;
-  char upper[MAX_PATH_LEN + 20], work[MAX_PATH_LEN + 20], merged[MAX_PATH_LEN + 20];
+  int ret = -1;
+  char upper[PATH_MAX], work[PATH_MAX], merged[PATH_MAX];
+  char *opts = NULL;
+  size_t opts_len;
 
-  snprintf(upper, sizeof(upper), "%s/upper", overlay_path);
-  snprintf(work, sizeof(work), "%s/work", overlay_path);
-  snprintf(merged, sizeof(merged), "%s/merged", overlay_path);
+  /* Validate inputs */
+  if (!base || !overlay_path) {
+    errno = EINVAL;
+    return -1;
+  }
 
+  /* Build paths with overflow checking */
+  if (snprintf(upper, sizeof(upper), "%s/upper", overlay_path) >= (int)sizeof(upper)) {
+    fprintf(stderr, "[OVERLAYFS] upper path too long\n");
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+
+  if (snprintf(work, sizeof(work), "%s/work", overlay_path) >= (int)sizeof(work)) {
+    fprintf(stderr, "[OVERLAYFS] work path too long\n");
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+
+  if (snprintf(merged, sizeof(merged), "%s/merged", overlay_path) >= (int)sizeof(merged)) {
+    fprintf(stderr, "[OVERLAYFS] merged path too long\n");
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+
+  /* Create directories */
   ret = mkdir(upper, 0755);
-  if(ret) return 1;
+  if (ret != 0 && errno != EEXIST) {
+    fprintf(stderr, "[OVERLAYFS] mkdir(%s) failed: %s\n", upper, strerror(errno));
+    return -1;
+  }
+
   ret = mkdir(work, 0755);
-  if(ret) return 1;
+  if (ret != 0 && errno != EEXIST) {
+    fprintf(stderr, "[OVERLAYFS] mkdir(%s) failed: %s\n", work, strerror(errno));
+    goto cleanup_upper;
+  }
+
   ret = mkdir(merged, 0755);
-  if(ret) return 1;
+  if (ret != 0 && errno != EEXIST) {
+    fprintf(stderr, "[OVERLAYFS] mkdir(%s) failed: %s\n", merged, strerror(errno));
+    goto cleanup_work;
+  }
 
-  // Mount overlay: base (lower) + upper (changes) = merged (view)
-  char opts[MAX_PATH_LEN * 3 + 128];
-  snprintf(opts, sizeof(opts), "lowerdir=%s,upperdir=%s,workdir=%s", base, upper, work);
+  /* Allocate options string dynamically (safer than PATH_MAX) */
+  opts_len = strlen("lowerdir=,upperdir=,workdir=") + strlen(base) + strlen(upper) + strlen(work) + 1;
 
-  return mount("overlay", merged, "overlay", 0, opts);
+  opts = malloc(opts_len);
+  if (!opts) {
+    fprintf(stderr, "[OVERLAYFS] out of memory\n");
+    goto cleanup_merged;
+  }
+
+  snprintf(opts, opts_len, "lowerdir=%s,upperdir=%s,workdir=%s", base, upper, work);
+
+  /* Mount overlay */
+  ret = mount("overlay", merged, "overlay", 0, opts);
+  if (ret != 0) {
+    fprintf(stderr, "[OVERLAYFS] mount failed: %s\n", strerror(errno));
+    fprintf(stderr, "[OVERLAYFS] options: %s\n", opts);
+    goto cleanup_merged;
+  }
+
+  /* Success */
+  free(opts);
+  return 0;
+
+cleanup_merged:
+  rmdir(merged);
+cleanup_work:
+  rmdir(work);
+cleanup_upper:
+  rmdir(upper);
+  free(opts);
+  return -1;
 }
 
 /* Retrieve real uid and gid even if running with sudo */
@@ -717,7 +778,7 @@ static int get_realuid(uid_t *uid, gid_t *gid) {
 
 /* Setup user namespace UID/GID mapping before entering sandbox */
 static int setup_userns_mappings(pid_t pid, uid_t uid, gid_t gid) {
-  char path[256];
+  char path[PATH_MAX];
   char mapping[256];
   int fd;
 

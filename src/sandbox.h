@@ -3,10 +3,10 @@
 
 #include <arpa/inet.h>
 #include <net/if.h>
+#include <limits.h>
 
 #include "cgroup.h"
 
-#define MAX_PATH_LEN 512
 static const char BUSYBOX_ZIP [] = "data/uav_sandbox_busybox.zip";
 static const char SANDBOX_ENTRYPOINT[] = "data/uav_sandbox_entrypoint.sh";
 
@@ -26,7 +26,7 @@ static const struct uav_cgroup_limits DEFAULT_LIMITS = {
 
 struct uav_sandbox_config {
   /* Actual path where runtime data is stored. Overlayfs */
-  char overlay_path[MAX_PATH_LEN];
+  char overlay_path[PATH_MAX];
   /* Name of the veth used by the host */
   char hostifname[IFNAMSIZ];
   /* Name of the veth used by the sandbox */
@@ -44,9 +44,9 @@ struct uav_sandbox {
   /* Identifier */
   char id[64];
   /* Path of the root filesystem tree */
-  char root[MAX_PATH_LEN];
+  char root[PATH_MAX];
   /* Actual path where runtime data is stored. Overlayfs */
-  char overlay_path[MAX_PATH_LEN];
+  char overlay_path[PATH_MAX];
   /* Name of the veth used by the host */
   char hostifname[IFNAMSIZ];
   /* Name of the veth used by the sandbox */
@@ -66,7 +66,6 @@ struct uav_sandbox {
   /* Signal to extract */
   int initialized;
 };
-
 
 int uav_sandbox_base_bootstrap(struct uav_sandbox *si, const char *sandbox_dir);
 int uav_sandbox_configure(struct uav_sandbox *s, const struct uav_cgroup_limits *limits, const struct uav_sandbox_config *config);
