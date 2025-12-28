@@ -1,2 +1,3 @@
 *.o
-simplav
+uav
+bpf/vmlinux.h
