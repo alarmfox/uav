@@ -30,6 +30,13 @@ struct uav_sandbox_entrypoint_args {
   int pipe_go[2];
 };
 
+static volatile sig_atomic_t stop_requested = 0;
+
+static void sigint_handler(int sig) {
+  printf("[SANDBOX] Received signal %d\n", sig);
+  __atomic_store_n(&stop_requested, 1, __ATOMIC_RELAXED);
+}
+
 /* Internal prototypes */
 static int sandbox_entrypoint(void *args_);
 static int create_overlayfs(const char *base, const char *overlay_path);
@@ -120,6 +127,9 @@ int uav_sandbox_configure(struct uav_sandbox *s, const struct uav_cgroup_limits 
 
   /* Save prefix */
   s->prefix = config->prefix;
+  
+  /* Initialize pid as -1 */
+  s->pid = -1;
 
   return 0;
 }
@@ -160,7 +170,7 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   memcpy(args->s, s, sizeof(struct uav_sandbox));
   memcpy(args->pipe_ready, pipe_ready, sizeof(pipe_ready));
   memcpy(args->pipe_go, pipe_go, sizeof(pipe_go));
-  strncpy(args->hostprogram, program, sizeof(args->hostprogram) - 1);
+  safe_strcpy(args->hostprogram, program, PATH_MAX);
 
   /* Create the overlayfs for this instance. */
   ret = setup_filesystem(s);
@@ -203,6 +213,14 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   ret = chmod(path, S_IRUSR | S_IXUSR);
   if(ret) goto cleanup;
 
+  /* Configure signals before cloning */
+  struct sigaction sa = {
+    .sa_handler = sigint_handler,
+    .sa_flags = 0,
+  };
+  sigemptyset(&sa.sa_mask);
+  sigaction(SIGINT, &sa, NULL);
+
   /* Clone */
   child = clone(sandbox_entrypoint, stack_top,
       CLONE_NEWNS |
@@ -215,6 +233,8 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
       args);
 
   if (child < 0) goto cleanup;
+
+  s->pid = child;
 
   /* Parent-only pipe usage */
   close(pipe_ready[1]); pipe_ready[1] = -1;
@@ -279,11 +299,26 @@ cleanup:
 
   /* Wait for child to exit */
   if (child > 0) {
-    waitpid(child, &wstatus, 0);
+    pid_t r;
+    while(1) {
+      r = waitpid(child, &wstatus, 0);
+      if (r == -1) {
+        if (errno == EINTR) {
+          /* If stop is requested just kill the process and wait */
+          if(__atomic_load_n(&stop_requested, __ATOMIC_RELAXED) == 1) {
+            kill(child, SIGKILL);
+            continue;
+          }
+          continue;
+        }
+      }
+      break;
+    }
 
     if (WIFEXITED(wstatus)) {
-      fprintf(stderr, "[SANDBOX] process exited status=%d\n", WEXITSTATUS(wstatus));
-      if(wstatus != 0) ret = 1;
+      const int es = WEXITSTATUS(wstatus);
+      fprintf(stderr, "[SANDBOX] process exited status=%d\n", es);
+      if(es != 0) ret = 1;
     } else if (WIFSIGNALED(wstatus)) {
       fprintf(stderr, "[SANDBOX] process killed by signal %d\n", WTERMSIG(wstatus));
     } else if (WIFSTOPPED(wstatus)) {
