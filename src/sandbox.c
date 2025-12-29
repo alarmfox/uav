@@ -234,8 +234,6 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
 
   if (child < 0) goto cleanup;
 
-  s->pid = child;
-
   /* Parent-only pipe usage */
   close(pipe_ready[1]); pipe_ready[1] = -1;
   close(pipe_go[0]);    pipe_go[0]    = -1;
