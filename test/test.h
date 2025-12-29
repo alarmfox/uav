@@ -2,6 +2,7 @@
 #define __UAV_TEST_H
 
 #include <assert.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +17,10 @@ struct uav_test_statistics {
 };
 
 static struct uav_test_statistics stats = {0, 0, 0,0, ""};
+
+static inline int is_root(void) {
+  return geteuid() == 0;
+}
 
 // Color codes for output
 #define COLOR_RED "\x1b[31m"

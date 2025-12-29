@@ -1,21 +1,11 @@
 #include "test.h"
 #include "cgroup.h"
 #include <sys/stat.h>
-#include <unistd.h>
 
-// Helper to check if running as root
-static int is_root(void) {
-  return geteuid() == 0;
-}
-
-int test_cgroup_create(void) {
+static int test_cgroup_create(void) {
   TEST_CASE("cgroup_create");
 
-  if (!is_root()) {
-    printf("SKIP (needs root)\n");
-    stats.passed_tests++;
-    return 0;
-  }
+  if (!is_root()) TEST_SKIP("needs root");
 
   const char *name = "uav_test_cgroup";
 
@@ -36,14 +26,10 @@ int test_cgroup_create(void) {
   TEST_SUCCESS();
 }
 
-int test_cgroup_create_duplicate(void) {
+static int test_cgroup_create_duplicate(void) {
   TEST_CASE("cgroup_create - duplicate");
 
-  if (!is_root()) {
-    printf("SKIP (needs root)\n");
-    stats.passed_tests++;
-    return 0;
-  }
+  if (!is_root()) TEST_SKIP("needs root");
 
   const char *name = "uav_test_cgroup_dup";
 
@@ -55,14 +41,10 @@ int test_cgroup_create_duplicate(void) {
   TEST_SUCCESS();
 }
 
-int test_cgroup_add_pid(void) {
+static int test_cgroup_add_pid(void) {
   TEST_CASE("cgroup_add_pid");
 
-  if (!is_root()) {
-    printf("SKIP (needs root)\n");
-    stats.passed_tests++;
-    return 0;
-  }
+  if (!is_root()) TEST_SKIP("needs root");
 
   const char *name = "uav_test_cgroup_pid";
 

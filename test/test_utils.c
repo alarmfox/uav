@@ -1,7 +1,7 @@
 #include "test.h"
 #include "utils.h"
 
-int test_safe_strcpy_normal(void) {
+static int test_safe_strcpy_normal(void) {
   TEST_CASE("safe_strcpy - normal copy");
 
   char buf[20];
@@ -11,7 +11,7 @@ int test_safe_strcpy_normal(void) {
   TEST_SUCCESS();
 }
 
-int test_safe_strcpy_truncate(void) {
+static int test_safe_strcpy_truncate(void) {
   TEST_CASE("safe_strcpy - truncation");
 
   char buf[5];
@@ -22,7 +22,7 @@ int test_safe_strcpy_truncate(void) {
   TEST_SUCCESS();
 }
 
-int test_safe_strcpy_edge_cases(void) {
+static int test_safe_strcpy_edge_cases(void) {
   TEST_CASE("safe_strcpy - edge cases");
 
   char buf[10] = "garbage";
@@ -40,7 +40,7 @@ int test_safe_strcpy_edge_cases(void) {
   TEST_SUCCESS();
 }
 
-int test_digest_to_hex(void) {
+static int test_digest_to_hex(void) {
   TEST_CASE("digest_to_hex");
 
   unsigned char digest[] = {0xde, 0xad, 0xbe, 0xef};
@@ -55,7 +55,7 @@ int test_digest_to_hex(void) {
   TEST_SUCCESS();
 }
 
-int test_digest_roundtrip(void) {
+static int test_digest_roundtrip(void) {
   TEST_CASE("digest hex roundtrip");
 
   unsigned char original[] = {0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef};

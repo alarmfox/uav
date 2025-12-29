@@ -18,7 +18,7 @@
 #include "utils.h"
 
 /* eBPF program */
-#include "uav.skel.h"
+#include "sandbox.skel.h"
 
 struct uav_sandbox_entrypoint_args {
   /* Pointer to configured uav_sandbox */
@@ -245,7 +245,7 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   if (ret) goto cleanup;
 
   /* eBPF */
-  s->skel = uavbpf__open();
+  s->skel = sandbox_bpf__open();
   if (!s->skel) goto cleanup;
 
   cgid = cgroup_getid("uav-cgroup");
@@ -253,10 +253,10 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
 
   s->skel->rodata->target_cgroup_id = cgid;
 
-  ret = uavbpf__load(s->skel);
+  ret = sandbox_bpf__load(s->skel);
   if (ret) goto cleanup;
 
-  ret = uavbpf__attach(s->skel);
+  ret = sandbox_bpf__attach(s->skel);
   if (ret) goto cleanup;
 
   ret = setup_userns_mappings(child, uid, gid);
@@ -293,7 +293,7 @@ cleanup:
   }
 
   if (s->skel) {
-    uavbpf__destroy(s->skel);
+    sandbox_bpf__destroy(s->skel);
     s->skel = NULL;
   }
 

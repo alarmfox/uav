@@ -1,6 +1,7 @@
-CFLAGS = -Wall -Wextra -D_GNU_SOURCE -D_XOPEN_SOURCE=500 -Isrc/ -std=c11
+CFLAGS  = -Wall -Wextra -D_GNU_SOURCE -D_XOPEN_SOURCE=500 -Isrc/ -std=c11
 LDFLAGS = -lbpf -lcrypto -lzip
 BPFTOOL = bpftool
+EBPF_CFLAGS = -g -O2 -target bpf
 
 ifeq ($(DEBUG),1)
 CFLAGS += -O0 -g
@@ -20,26 +21,19 @@ TEST_SRCS := $(wildcard test/*.c)
 TEST_BINS = $(patsubst test/%.c,test/%,$(TEST_SRCS))
 
 # eBPF compilation
-EBPF_SRC = bpf/uav.bpf.c
-EBPF_OBJ = bpf/uav.bpf.o
-SKELETON = src/uav.skel.h
+EBPF_SRCS = bpf/sandbox.bpf.c
+EBPF_OBJS = $(EBPF_SRCS:.c=.o)
+EBPF_SKELETONS = src/sandbox.skel.h
 
-all: $(SKELETON) $(TARGET)
-
-$(SKELETON): $(EBPF_OBJ)
-	$(BPFTOOL) gen skeleton $< name uavbpf > $@
-
-$(EBPF_OBJ): $(EBPF_SRC) bpf/vmlinux.h
-	clang -target bpf -O2 -g -c $< -o $@
+all: $(EBPF_SKELETONS) $(TARGET)
 
 $(TARGET): $(OBJS)
 	$(CC) -o $@ $^ $(LDFLAGS)
 
-test/%: test/%.o $(SKELETON) $(LIB_OBJS)
+test/%: test/%.o $(EBPF_SKELETONS) $(LIB_OBJS)
 	$(CC) $(CFLAGS) -o $@ $< $(LIB_OBJS) $(LDFLAGS)
 
 .PHONY: test
-# Run all tests
 test: $(TEST_BINS)
 	@for t in $(TEST_BINS); do \
 		echo "Running $$t..."; \
@@ -58,13 +52,19 @@ valgrind: $(TEST_BINS)
 		./$$t || exit 1; \
 	done
 
-bpf/vmlinux.h:
-	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
+src/%.skel.h: bpf/%.bpf.o
+	$(BPFTOOL) gen skeleton $< > $@
+
+bpf/%.bpf.o: bpf/%.bpf.c bpf/vmlinux.h
+	clang $(EBPF_CFLAGS) -c $< -o $@
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
+bpf/vmlinux.h:
+	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
+
 clean:
-	rm -f $(OBJS) $(TARGET) $(EBPF_OBJ) $(SKELETON) $(TEST_BINS)
+	rm -f $(OBJS) $(TARGET) $(EBPF_OBJ) $(EBPF_SKELETONS) $(TEST_BINS)
 
 .PHONY: all clean

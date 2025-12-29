@@ -1,7 +1,6 @@
 #include "test.h"
 
 #include <sys/stat.h>
-#include <unistd.h>
 
 #include "sandbox.h"
 #include "utils.h"
@@ -9,9 +8,6 @@
 static const char program[] = "#!/bin/sh\nexit 0";
 
 // Helper to check if running as root
-static int is_root(void) {
-  return geteuid() == 0;
-}
 
 static int test_sandbox_run_simple_program(void) {
   TEST_CASE("sandbox - run simple program ");

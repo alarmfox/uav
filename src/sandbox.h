@@ -60,7 +60,7 @@ struct uav_sandbox {
   /* Limits to be applied to the sandbox */
   struct uav_cgroup_limits limits;
   /* Reference to eBPF program */
-  struct uavbpf *skel;
+  struct sandbox_bpf *skel;
   /* Pointer to stack bottom: stack + limits.stack_size = stack_top */
   unsigned char *stack;
   /* Signal to extract */
