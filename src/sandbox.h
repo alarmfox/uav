@@ -8,7 +8,6 @@
 #include "cgroup.h"
 
 static const char BUSYBOX_ZIP [] = "data/uav_sandbox_busybox.zip";
-static const char SANDBOX_ENTRYPOINT[] = "data/uav_sandbox_entrypoint.sh";
 
 /* Default limits */
 static const struct uav_cgroup_limits DEFAULT_LIMITS = {
