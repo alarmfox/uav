@@ -698,7 +698,6 @@ static int setup_filesystem(const struct uav_sandbox *s) {
   free(path);
 
   return 0;
-
 }
 
 /* Copy a file from `src_path` in `dst_name` (preserving permissions) relative to sandbox */
@@ -709,6 +708,10 @@ static int sandbox_copyfile(const struct uav_sandbox *s, const char *src, const 
   int ret;
 
   if(!dstpath) return 1;
+
+  /* Skip '/' if specified  */
+  if(dst[0] == '/') dst++;
+  printf("%s\n", dst);
 
   snprintf(dstpath, dstlen, "%s/merged/%s", s->overlay_path, dst);
 
