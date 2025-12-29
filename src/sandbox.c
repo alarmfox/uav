@@ -42,8 +42,10 @@ static void sigint_handler(int sig) {
   __atomic_store_n(&g_stop, 1, __ATOMIC_RELAXED);
 }
 
-int start_capture(struct uav_sandbox *);
-int stop_capture(struct uav_sandbox *);
+/* These 2 function are implemented in src/capture.c because we cannot put together libbpf and libpcap stuff.
+ * More on: https://github.com/libbpf/libbpf/issues/376 */
+int pcap_start_capture(struct uav_sandbox *);
+int pcap_stop_capture(struct uav_sandbox *);
 
 /* Internal prototypes */
 static int sandbox_entrypoint(void *args_);
@@ -75,7 +77,7 @@ int uav_sandbox_base_bootstrap(struct uav_sandbox *si, const char *sandbox_dir) 
   }
 
   /* Extract busybox zip into sandbox root */
-  ret = extract_directory(BUSYBOX_ZIP, si->root);
+  ret = zip_extract_directory(BUSYBOX_ZIP, si->root);
   if (ret != 0) {
     fprintf(stderr, "[SANDBOX] cannot extract base sandbox filesystem: %s\n", strerror(errno));
     rmtree(si->root);
@@ -282,7 +284,7 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   if (ret) goto cleanup;
 
   /* Start capture thread for veth */
-  ret = start_capture(s);
+  ret = pcap_start_capture(s);
   if(ret) goto cleanup;
 
   /* Allow child to run */
@@ -335,7 +337,7 @@ cleanup:
   }
 
   /* Stop capture */
-  stop_capture(s);
+  pcap_stop_capture(s);
 
   if (s->skel) {
     sandbox_bpf__destroy(s->skel);

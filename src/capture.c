@@ -17,7 +17,7 @@ struct pcap_thread_args {
 
 static void *pcap_capture_loop(void *args_);
 
-int start_capture(struct uav_sandbox *s) {
+int pcap_start_capture(struct uav_sandbox *s) {
   struct pcap_thread_args *args = NULL;
   int fd;
   int ret;
@@ -52,7 +52,7 @@ int start_capture(struct uav_sandbox *s) {
 }
 
 /* Stop capture */
-void stop_capture(struct uav_sandbox *s) {
+void pcap_stop_capture(struct uav_sandbox *s) {
   uint64_t one = 1;
 
   if (s->capture_stopfd < 0)

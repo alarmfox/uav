@@ -77,7 +77,7 @@ int compare_digest(const unsigned char *a, const unsigned char *b, int len) {
 }
 
 /* Extract src zip file in output directory */
-int extract_directory(const char *src, const char *output_path) {
+int zip_extract_directory(const char *src, const char *output_path) {
   int ret;
   zip_t *za = zip_open(src, ZIP_RDONLY, &ret);
   zip_int64_t num_entries, nread;
