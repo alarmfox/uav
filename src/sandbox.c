@@ -127,9 +127,6 @@ int uav_sandbox_configure(struct uav_sandbox *s, const struct uav_cgroup_limits 
 
   /* Save prefix */
   s->prefix = config->prefix;
-  
-  /* Initialize pid as -1 */
-  s->pid = -1;
 
   return 0;
 }
