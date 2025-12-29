@@ -64,6 +64,10 @@ struct uav_sandbox {
   unsigned char *stack;
   /* Signal to extract */
   int initialized;
+  /* Capture thread */
+  pthread_t capture_thread;
+  /* Stop fd eventfd */
+  int capture_stopfd;
 };
 
 int uav_sandbox_base_bootstrap(struct uav_sandbox *si, const char *sandbox_dir);

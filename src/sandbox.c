@@ -2,9 +2,12 @@
 #include <grp.h>
 #include <linux/netlink.h>
 #include <net/if.h>
+#include <poll.h>
+#include <pthread.h>
 #include <sched.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/eventfd.h>
 #include <sys/mount.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -20,7 +23,7 @@
 /* eBPF program */
 #include "sandbox.skel.h"
 
-struct uav_sandbox_entrypoint_args {
+struct sandbox_entrypoint_args {
   /* Pointer to configured uav_sandbox */
   struct uav_sandbox *s;
   /* Path of the program to execute host-side */
@@ -30,12 +33,17 @@ struct uav_sandbox_entrypoint_args {
   int pipe_go[2];
 };
 
-static volatile sig_atomic_t stop_requested = 0;
+static volatile sig_atomic_t g_stop = 0;
 
+/* Stop everything */
 static void sigint_handler(int sig) {
   printf("[SANDBOX] Received signal %d\n", sig);
-  __atomic_store_n(&stop_requested, 1, __ATOMIC_RELAXED);
+
+  __atomic_store_n(&g_stop, 1, __ATOMIC_RELAXED);
 }
+
+int start_capture(struct uav_sandbox *);
+int stop_capture(struct uav_sandbox *);
 
 /* Internal prototypes */
 static int sandbox_entrypoint(void *args_);
@@ -87,6 +95,14 @@ int uav_sandbox_configure(struct uav_sandbox *s, const struct uav_cgroup_limits 
   char template[] = "uav_sandbox_XXXXXX";
   char *p = NULL;
   size_t len = 0;
+  struct sigaction sa = {
+    .sa_handler = sigint_handler,
+    .sa_flags = 0,
+  };
+  
+  /* Configure signals */
+  sigemptyset(&sa.sa_mask);
+  sigaction(SIGINT, &sa, NULL);
 
   if(mkdtemp(template) == NULL) return 1;
   if(realpath(template, s->overlay_path) == NULL) return 1;
@@ -148,7 +164,7 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   unsigned char *stack_top = s->stack + s->limits.stack_size;
   char *path = NULL;
   size_t len;
-  struct uav_sandbox_entrypoint_args *args = NULL;
+  struct sandbox_entrypoint_args *entrypoint_args = NULL;
 
   /* Pipes */
   ret = pipe(pipe_ready);
@@ -158,16 +174,16 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   if (ret < 0) goto cleanup;
 
   /* Args */
-  args = malloc(sizeof(struct uav_sandbox_entrypoint_args));
-  if (!args) goto cleanup;
+  entrypoint_args = malloc(sizeof(struct sandbox_entrypoint_args));
+  if (!entrypoint_args) goto cleanup;
 
-  args->s = malloc(sizeof(struct uav_sandbox));
-  if (!args->s) goto cleanup;
+  entrypoint_args->s = malloc(sizeof(struct uav_sandbox));
+  if (!entrypoint_args->s) goto cleanup;
 
-  memcpy(args->s, s, sizeof(struct uav_sandbox));
-  memcpy(args->pipe_ready, pipe_ready, sizeof(pipe_ready));
-  memcpy(args->pipe_go, pipe_go, sizeof(pipe_go));
-  safe_strcpy(args->hostprogram, program, PATH_MAX);
+  memcpy(entrypoint_args->s, s, sizeof(struct uav_sandbox));
+  memcpy(entrypoint_args->pipe_ready, pipe_ready, sizeof(pipe_ready));
+  memcpy(entrypoint_args->pipe_go, pipe_go, sizeof(pipe_go));
+  safe_strcpy(entrypoint_args->hostprogram, program, PATH_MAX);
 
   /* Create the overlayfs for this instance. */
   ret = setup_filesystem(s);
@@ -210,14 +226,6 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   ret = chmod(path, S_IRUSR | S_IXUSR);
   if(ret) goto cleanup;
 
-  /* Configure signals before cloning */
-  struct sigaction sa = {
-    .sa_handler = sigint_handler,
-    .sa_flags = 0,
-  };
-  sigemptyset(&sa.sa_mask);
-  sigaction(SIGINT, &sa, NULL);
-
   /* Clone */
   child = clone(sandbox_entrypoint, stack_top,
       CLONE_NEWNS |
@@ -227,7 +235,7 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
       CLONE_NEWCGROUP |
       CLONE_NEWUSER |
       SIGCHLD,
-      args);
+      entrypoint_args);
 
   if (child < 0) goto cleanup;
 
@@ -274,6 +282,8 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   if (ret) goto cleanup;
 
   /* Start capture thread for veth */
+  ret = start_capture(s);
+  if(ret) goto cleanup;
 
   /* Allow child to run */
   c = 'X';
@@ -286,6 +296,7 @@ cleanup:
     free(path);
     path = NULL;
   }
+
   /* Notify child */
   if (pipe_go[1] != -1) {
     write(pipe_go[1], &c, 1);
@@ -300,7 +311,7 @@ cleanup:
       if (r == -1) {
         if (errno == EINTR) {
           /* If stop is requested just kill the process and wait */
-          if(__atomic_load_n(&stop_requested, __ATOMIC_RELAXED) == 1) {
+          if(__atomic_load_n(&g_stop, __ATOMIC_RELAXED) == 1) {
             kill(child, SIGKILL);
             continue;
           }
@@ -321,17 +332,19 @@ cleanup:
     } else if (WIFCONTINUED(wstatus)) {
       fprintf(stderr,"[SANDBOX] process continued\n");
     }
-
   }
+
+  /* Stop capture */
+  stop_capture(s);
 
   if (s->skel) {
     sandbox_bpf__destroy(s->skel);
     s->skel = NULL;
   }
 
-  if (args) {
-    if (args->s) free(args->s);
-    free(args);
+  if (entrypoint_args) {
+    if (entrypoint_args->s) free(entrypoint_args->s);
+    free(entrypoint_args);
   }
 
   if (pipe_ready[0] != -1) close(pipe_ready[0]);
@@ -393,7 +406,7 @@ static int sandbox_entrypoint(void *args_) {
   int ret;
   char c;
   char *newroot, *oldroot;
-  struct uav_sandbox_entrypoint_args *args = args_;
+  struct sandbox_entrypoint_args *args = args_;
   const struct uav_sandbox *s = args->s;
   int *pipe_ready = args->pipe_ready;
   int *pipe_go = args->pipe_go;
