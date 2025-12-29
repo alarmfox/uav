@@ -90,7 +90,7 @@ int uav_sandbox_base_bootstrap(struct uav_sandbox *si, const char *sandbox_dir) 
 }
 
 /* Configure sandbox with runtime data. This includes overlayfs path, IPv4 addresses. This function
- * does not perform any action apart creating the overlayfs directory, but populates structure for
+ * does not perform any action apart creating the base directory, but populates structure for
  * later use */
 int uav_sandbox_configure(struct uav_sandbox *s, const struct uav_cgroup_limits *limits, const struct uav_sandbox_config *config) {
   /* Create the ovelayfs. This creates a unique temporary directory */
@@ -101,7 +101,7 @@ int uav_sandbox_configure(struct uav_sandbox *s, const struct uav_cgroup_limits 
     .sa_handler = sigint_handler,
     .sa_flags = 0,
   };
-  
+
   /* Configure signals */
   sigemptyset(&sa.sa_mask);
   sigaction(SIGINT, &sa, NULL);
