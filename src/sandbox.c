@@ -711,7 +711,6 @@ static int sandbox_copyfile(const struct uav_sandbox *s, const char *src, const 
 
   /* Skip '/' if specified  */
   if(dst[0] == '/') dst++;
-  printf("%s\n", dst);
 
   snprintf(dstpath, dstlen, "%s/merged/%s", s->overlay_path, dst);
 
