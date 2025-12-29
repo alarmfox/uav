@@ -67,20 +67,9 @@ int uav_sandbox_base_bootstrap(struct uav_sandbox *si, const char *sandbox_dir) 
     return -1;
   }
 
-  /* Copy entrypoint script */
-  char entrypoint_dst[512];
-  snprintf(entrypoint_dst, sizeof(entrypoint_dst), "%s/uav_sandbox_entrypoint.sh", si->root);
-  ret = copyfile(SANDBOX_ENTRYPOINT, entrypoint_dst);
-  if (ret != 0) {
-    fprintf(stderr, "[SANDBOX] cannot copy entrypoint: %s\n", strerror(errno));
-    rmtree(si->root);
-    return -1;
-  }
-
   si->initialized = 1;
 
-  /* Make entrypoint executable */
-  return chmod(entrypoint_dst, 0755);
+  return 0;
 }
 
 /* Configure sandbox with runtime data. This includes overlayfs path, IPv4 addresses. This function
@@ -126,8 +115,8 @@ int uav_sandbox_configure(struct uav_sandbox *s, const struct uav_cgroup_limits 
   }
 
   /* Copy ifnames */
-  strncpy(s->hostifname, config->hostifname, strlen(config->hostifname) + 1);
-  strncpy(s->sandboxifname, config->sandboxifname, strlen(config->sandboxifname) + 1);
+  safe_strcpy(s->hostifname, config->hostifname, IFNAMSIZ);
+  safe_strcpy(s->sandboxifname, config->sandboxifname, IFNAMSIZ);
 
   /* Save prefix */
   s->prefix = config->prefix;
@@ -150,7 +139,8 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   char c = 'E';
   unsigned int cgid;
   unsigned char *stack_top = s->stack + s->limits.stack_size;
-  char path[PATH_MAX];
+  char *path = NULL;
+  size_t len;
   struct uav_sandbox_entrypoint_args *args = NULL;
 
   /* Pipes */
@@ -188,14 +178,20 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
     NULL
   };
 
+  len = strlen(s->overlay_path) + strlen("/merged/entrypoint.sh") + 1;
+  path = malloc(len);
+  if(!path) return 1;
+
   for(const char **p = dirs; *p != NULL; p++) {
-    snprintf(path, sizeof(path), "%s%s", s->overlay_path, *p);
+    snprintf(path, len, "%s%s", s->overlay_path, *p);
     ret = chown(path, uid, gid);
-    if(ret) goto cleanup;
+    if(ret) break;
   }
 
+  if(ret) goto cleanup;
+
   /* Write entrypoint */
-  snprintf(path, sizeof(path), "%s/merged/entrypoint.sh", s->overlay_path);
+  snprintf(path, len, "%s/merged/entrypoint.sh", s->overlay_path);
   ret = write_file_str(path, entrypoint);
 
   if(ret) goto cleanup;
@@ -262,6 +258,8 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   ret = setup_userns_mappings(child, uid, gid);
   if (ret) goto cleanup;
 
+  /* Start capture thread for veth */
+
   /* Allow child to run */
   c = 'X';
   ret = 0;
@@ -269,6 +267,10 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   printf("[SANDBOX] running process %d\n", child);
 
 cleanup:
+  if(path) {
+    free(path);
+    path = NULL;
+  }
   /* Notify child */
   if (pipe_go[1] != -1) {
     write(pipe_go[1], &c, 1);
@@ -319,7 +321,8 @@ cleanup:
 /* Destroy a sandbox by removing its filesystem tree */
 void uav_sandbox_destroy(struct uav_sandbox *s) {
   int ret;
-  char path[PATH_MAX];
+  size_t len;
+  char *path = NULL;
 
   const char *dirs[] = {
     "/merged/dev/pts",
@@ -330,11 +333,18 @@ void uav_sandbox_destroy(struct uav_sandbox *s) {
     NULL
   };
 
+  len = strlen(s->overlay_path) + strlen("/merged/dev/pts") + 1;
+  path = malloc(len);
+  if(!path) return;
+
   for(const char **p = dirs; *p != NULL; p++) {
-    snprintf(path, sizeof(path), "%s%s", s->overlay_path, *p);
+    snprintf(path, len, "%s%s", s->overlay_path, *p);
     ret = umount2(path, MNT_FORCE);
     if(ret) fprintf(stderr, "[SANDBOX] cannot unmount %s: %s\n", path, strerror(errno)); 
   }
+
+  free(path);
+  path = NULL;
 
   /* Remove tree */
   ret = rmtree(s->overlay_path);
@@ -352,12 +362,19 @@ void uav_sandbox_destroy(struct uav_sandbox *s) {
 static int sandbox_entrypoint(void *args_) {
   int ret;
   char c;
-  char newroot[PATH_MAX], oldroot[PATH_MAX];
+  char *newroot, *oldroot;
   struct uav_sandbox_entrypoint_args *args = args_;
   const struct uav_sandbox *s = args->s;
   int *pipe_ready = args->pipe_ready;
   int *pipe_go = args->pipe_go;
   const char *err_msg = NULL;
+  size_t newroot_len = strlen(s->overlay_path) + strlen("/merged") + 1;
+  size_t oldroot_len = strlen(s->overlay_path) + strlen("/merged") + strlen("/oldroot") + 1;
+
+  newroot = malloc(newroot_len);
+  oldroot = malloc(oldroot_len);
+
+  if(!newroot || !oldroot) goto fail;
 
   /* 1. Sync with Parent */
   close(pipe_go[1]);
@@ -381,8 +398,8 @@ static int sandbox_entrypoint(void *args_) {
   close(pipe_go[0]);
 
   /* 2. Prepare paths */
-  snprintf(newroot, sizeof(newroot), "%s/merged", s->overlay_path);
-  snprintf(oldroot, sizeof(oldroot), "%s/merged/oldroot", s->overlay_path);
+  snprintf(newroot, newroot_len, "%s/merged", s->overlay_path);
+  snprintf(oldroot, oldroot_len, "%s/merged/oldroot", s->overlay_path);
 
   /* 3. Setup Mount Namespace Requirements */
   // Change propagation to private to satisfy pivot_root requirements
@@ -441,6 +458,8 @@ static int sandbox_entrypoint(void *args_) {
     goto fail;
   }
 
+  /* Drop capabilities */
+
   /* 7. Drop privileges (Set UID/GID to 0 inside namespace -> maps to userid outside) */
   ret = setresgid(0, 0, 0);
   if (ret < 0) {
@@ -466,6 +485,12 @@ static int sandbox_entrypoint(void *args_) {
   ret = mkdir("/etc", 755);
   if(ret) goto fail;
 
+  /* Free path */
+  free(oldroot);
+  free(newroot);
+  oldroot = NULL;
+  newroot = NULL;
+
   write_file_str("/etc/hostname", s->id);
 
   /* 8. Execute */
@@ -479,6 +504,8 @@ fail:
   if (err_msg) {
     fprintf(stderr, "[SANDBOX] cannot start process %s: %s\n", err_msg, strerror(errno));
   }
+  if(oldroot) free(oldroot);
+  if(newroot) free(newroot);
   _exit(1);
 }
 
@@ -584,7 +611,8 @@ exit:
 /* Setup filesystem: create the overlayfs (the base directory of the running instance) and mount /proc and /tmp */
 static int setup_filesystem(const struct uav_sandbox *s) {
   int ret;
-  char path[PATH_MAX], options[256];
+  char *path = NULL, options[256];
+  size_t len;
 
   /* Mount overlayfs from sandbox base */
   ret = create_overlayfs(s->root, s->overlay_path);
@@ -594,42 +622,68 @@ static int setup_filesystem(const struct uav_sandbox *s) {
   }
 
   /* Create /tmp and mount tmpfs */
-  snprintf(path, sizeof(path), "%s/merged/tmp", s->overlay_path);
-  ret = mkdir(path, 0755);
-  if(ret) return 1;
+  len = strlen(s->overlay_path) + strlen("/merged/tmp") + 1;
+  path = malloc(len);
+  if(!path) return 1;
+  
+  snprintf(path, len, "%s/merged/tmp", s->overlay_path);
+  mkdir(path, 0755);
 
   snprintf(options, sizeof(options), "size=%zu", s->limits.tmpfs_size);
   ret = mount("tmpfs", path, "tmpfs", 0, options);
-  if(ret) return 1;
+  if(ret) {
+    free(path);
+    return 1;
+  }
+  free(path);
 
   /* Create /proc and mount procfs */
-  snprintf(path, sizeof(path), "%s/merged/proc", s->overlay_path);
-  ret = mkdir(path, 0755);
-  if(ret) return 1;
+  len = strlen(s->overlay_path) + strlen("/merged/proc") + 1;
+  path = malloc(len);
+  if(!path) return 1;
+
+  snprintf(path, len,"%s/merged/proc", s->overlay_path);
+  mkdir(path, 0755);
 
   ret = mount("proc", path, "proc", MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL);
-  if(ret) return 1;
+  if(ret) {
+    free(path);
+    return 1;
+  }
+  free(path);
 
   /* Create /dev and mount it as a tmpfs*/
-  snprintf(path, sizeof(path), "%s/merged/dev", s->overlay_path);
-  ret = mkdir(path, 0755);
-  if(ret) return 1;
+  len = strlen(s->overlay_path) + strlen("/merged/dev") + 1;
+  path = malloc(len);
+  if(!path) return 1;
+
+  snprintf(path, len, "%s/merged/dev", s->overlay_path);
+  mkdir(path, 0755);
 
   ret = mount("tmpfs", path, "tmpfs", MS_NOSUID | MS_NOEXEC, "mode=755");
-  if(ret) return 1;
+  if(ret) {
+    free(path);
+    return 1;
+  }
+  free(path);
 
   /* Required device nodes */
-  snprintf(path, sizeof(path), "%s/merged/dev/null", s->overlay_path);
+  /* Allocate once since this the bigger size, reuse path for allocations */
+  len = strlen(s->overlay_path) + strlen("/merged/dev/null") + 1;
+  path = malloc(len);
+  if(!path) return 1;
+
+  snprintf(path, len, "%s/merged/dev/null", s->overlay_path);
   mknod(path, S_IFCHR | 0666, makedev(1, 3));
 
-  snprintf(path, sizeof(path), "%s/merged/dev/zero", s->overlay_path);
+  snprintf(path, len, "%s/merged/dev/zero", s->overlay_path);
   mknod(path, S_IFCHR | 0666, makedev(1, 5));
 
-  snprintf(path, sizeof(path), "%s/merged/dev/tty", s->overlay_path);
+  snprintf(path, len, "%s/merged/dev/tty", s->overlay_path);
   mknod(path, S_IFCHR | 0666, makedev(5, 0));
 
   /* /dev/pts */
-  snprintf(path, sizeof(path), "%s/merged/dev/pts", s->overlay_path);
+  snprintf(path, len, "%s/merged/dev/pts", s->overlay_path);
   mkdir(path, 0755);
 
   ret = mount("devpts", path, "devpts", 0,
@@ -637,39 +691,56 @@ static int setup_filesystem(const struct uav_sandbox *s) {
   if (ret) return 1;
 
   /* /dev/ptmx */
-  snprintf(path, sizeof(path), "%s/merged/dev/ptmx", s->overlay_path);
-  return symlink("/dev/pts/ptmx", path);
+  snprintf(path, len, "%s/merged/dev/ptmx", s->overlay_path);
+  ret = symlink("/dev/pts/ptmx", path);
+  if (ret) return 1;
+
+  free(path);
+
+  return 0;
 
 }
 
 /* Copy a file from `src_path` in `dst_name` (preserving permissions) relative to sandbox */
-static int sandbox_copyfile(const struct uav_sandbox *si, const char *src_path, const char *dst_name) {
-  char dst_path[PATH_MAX];
+static int sandbox_copyfile(const struct uav_sandbox *s, const char *src, const char *dst) {
+  size_t dstlen = strlen(s->overlay_path) + strlen("/merged/") + strlen(dst) + 1;
+  char *dstpath = malloc(dstlen);
   struct stat statbuf;
   int ret;
 
-  snprintf(dst_path, sizeof(dst_path), "%s/merged/%s", si->overlay_path, dst_name);
+  if(!dstpath) return 1;
+
+  snprintf(dstpath, dstlen, "%s/merged/%s", s->overlay_path, dst);
 
   /* Copy file into sandbox */
-  ret = copyfile(src_path, dst_path);
+  ret = copyfile(src, dstpath);
   if (ret != 0) {
     fprintf(stderr, "[SANDBOX] cannot copy file to sandbox: %s\n", strerror(errno));
+    free(dstpath);
+    dstpath = NULL;
     return 1;
   }
 
   /* Get permissions */
-  ret = stat(src_path, &statbuf);
+  ret = stat(src, &statbuf);
   if (ret != 0) {
     fprintf(stderr, "[SANDBOX] cannot stat file: %s\n", strerror(errno));
+    free(dstpath);
+    dstpath = NULL;
     return 1;
   }
 
   /* Apply permissions to copied file */
-  ret = chmod(dst_path,  statbuf.st_mode);
+  ret = chmod(dstpath,  statbuf.st_mode);
   if (ret != 0) {
     fprintf(stderr, "[SANDBOX] cannot chmod file: %s\n", strerror(errno));
+    free(dstpath);
+    dstpath = NULL;
     return 1;
   }
+
+  free(dstpath);
+  dstpath = NULL;
 
   return 0;
 }

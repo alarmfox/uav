@@ -22,13 +22,16 @@ static inline int hexval(char c) {
 }
 
 /* Perform safe strcopy */
-void safe_strcpy(char *dst, const char *src, size_t size) {
+size_t safe_strcpy(char *dst, const char *src, size_t size) {
   /* Sanity check */
-  if(!src || !dst) return;
+  if(!src || !dst || size == 0) return 0;
 
-  size_t len = strnlen(src, size - 1);
-  memcpy(dst, src, len);
-  dst[len] = '\0';
+  size_t srclen = strnlen(src, size);
+  size_t copylen = (srclen >= size) ? size - 1 : srclen;
+  memmove(dst, src, copylen);
+  dst[copylen] = '\0';
+
+  return srclen;
 }
 
 /* Convert the current digest in a hex string. The hexstring must be null terminated by the caller */

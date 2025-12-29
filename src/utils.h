@@ -6,7 +6,7 @@
 
 #define SHA256_DIGEST_LEN 32
 
-void safe_strcpy(char *dst, const char *src, size_t size);
+size_t safe_strcpy(char *dst, const char *src, size_t size);
 ssize_t digest_to_hex(const unsigned char *digest, int len, char *buf);
 ssize_t digest_from_hex(const char *buf, int len, unsigned char *digest);
 int compare_digest(const unsigned char *a, const unsigned char *b, int len);
