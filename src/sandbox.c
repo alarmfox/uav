@@ -2,8 +2,6 @@
 #include <linux/netlink.h>
 #include <net/if.h>
 #include <poll.h>
-#include <linux/prctl.h>
-#include <sys/prctl.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdlib.h>
