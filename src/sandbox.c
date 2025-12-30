@@ -25,14 +25,14 @@
 
 /* Message types for parent-child communication */
 enum sandbox_msg_type {
-	MSG_INVALID = 0,
-	MSG_CHILD_READY,          /* Child: initial setup done, ready for parent */
-	MSG_PARENT_GO,            /* Parent: continue with next phase */
-	MSG_CHILD_USERNS_READY,   /* Child: user namespace created */
-	MSG_PARENT_MAPPINGS_DONE, /* Parent: user mappings configured */
-	MSG_CHILD_ERROR,          /* Child: error occurred */
-	MSG_PARENT_ERROR,         /* Parent: error occurred */
-	MSG_CHILD_EXIT,           /* Child: exiting normally */
+  MSG_INVALID = 0,
+  MSG_CHILD_READY,          /* Child: initial setup done, ready for parent */
+  MSG_PARENT_GO,            /* Parent: continue with next phase */
+  MSG_CHILD_USERNS_READY,   /* Child: user namespace created */
+  MSG_PARENT_MAPPINGS_DONE, /* Parent: user mappings configured */
+  MSG_CHILD_ERROR,          /* Child: error occurred */
+  MSG_PARENT_ERROR,         /* Parent: error occurred */
+  MSG_CHILD_EXIT,           /* Child: exiting normally */
 };
 
 struct sandbox_msg {
