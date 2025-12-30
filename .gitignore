@@ -1,3 +1,4 @@
 *.o
 uav
 bpf/vmlinux.h
+*.skel.h
