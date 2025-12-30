@@ -36,8 +36,9 @@ enum sandbox_msg_type {
 };
 
 struct sandbox_msg {
-	enum sandbox_msg_type type;
-	int data;  /* Optional data (e.g., error code, fd) */
+  enum sandbox_msg_type type;
+  /* Optional data (e.g., error code, fd) */
+  int data;
 };
 
 struct sandbox_entrypoint_args {
