@@ -373,6 +373,11 @@ static int sandbox_entrypoint(void *args_) {
   ret = mount("tmpfs", "/dev", "tmpfs", MS_NOSUID | MS_STRICTATIME, "mode=755");
   if (ret < 0) { err_msg = "mount: /dev tmpfs"; goto fail; }
 
+  /* Mount /dev/shm */
+  mkdir("/dev/shm", 0555);
+  ret = mount("tmpfs", "/dev/shm", "tmpfs", MS_NOSUID | MS_NODEV | MS_NOEXEC | MS_RELATIME, "size=65536k");
+  if (ret < 0) { err_msg = "mount: /dev tmpfs"; goto fail; }
+
   // 2. Define the essential devices to "pass through"
   const char *devs[] = {
     "/dev/null",
