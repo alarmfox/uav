@@ -81,7 +81,6 @@ static const char entrypoint[] =
   "mkdir -p /home /root \n"
   "echo 'root:x:0:0:root:/root:/bin/sh' > /etc/passwd\n"
   "echo 'nameserver 1.1.1.1' > /etc/resolv.conf\n"
-  "export PS1='(\\u@\\h)>' \n"
   "exec $@";
 
 #endif // !__UAV_SANDBOX_H

@@ -155,232 +155,141 @@ int uav_sandbox_configure(struct uav_sandbox *s, const struct uav_cgroup_limits 
 
 /* Execute a program in the sandbox. This includes spawning a new process and attaching the ebpf program */
 int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
-  /* Sanity check */
   if (!s || !program) return 1;
 
-  int ret = 1, wstatus, sockfd[2];
+  int ret = 1, wstatus, sockfd[2] = {-1, -1};
   pid_t child = -1;
-  uid_t uid;
-  gid_t gid;
+  uid_t uid; gid_t gid;
   unsigned int cgid;
-  unsigned char *stack_top = s->stack + s->limits.stack_size;
   struct sandbox_entrypoint_args entrypoint_args = {0};
-  char *path = NULL;
   struct sandbox_msg msg;
-  size_t pathlen;
 
-  /* Create a socket pair for bidirectional communication */
   if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockfd) < 0) {
-    fprintf(stderr, "[SANDBOX] cannot create socket pair: %s\n", strerror(errno));
-    goto cleanup;
+    fprintf(stderr, "[SANDBOX] socketpair: %s\n", strerror(errno));
+    return 1;
   }
 
-  /* Args */
   entrypoint_args.s = s;
+  entrypoint_args.comm_sock = sockfd[1];
   safe_strcpy(entrypoint_args.hostprogram, program, PATH_MAX);
-  entrypoint_args.comm_sock = sockfd[1];  /* Child gets one end */
 
-  /* Create the filesystem */
   ret = setup_filesystem(s);
-  if(ret) goto cleanup;
+  if (ret) goto cleanup;
 
-  /* Get real uid/gid for mapping */
   ret = get_realuid(&uid, &gid);
-  if(ret) goto cleanup;
+  if (ret) goto cleanup;
 
-  /* Give permissions to sandbox directories */
-  pathlen = strlen(s->overlay_path) + strlen("/merged") + 127 + 1;
-  path = malloc(pathlen);
-  if(!path) goto cleanup;
-
-  const char *dirs[] = { "/merged", "/upper", "/work", "/", NULL };
-  for(const char **p = dirs; *p != NULL; p++) {
-    snprintf(path, pathlen, "%s%s", s->overlay_path, *p);
-    ret = chown(path, uid, gid);
-    if(ret) goto cleanup;
-  }
-
-  /* Clone WITHOUT CLONE_NEWUSER initially */
-  child = clone(sandbox_entrypoint, stack_top,
-      CLONE_NEWUSER |
-      CLONE_NEWPID |
-      CLONE_NEWNS |
-      CLONE_NEWNET |
-      CLONE_NEWUTS |
-      CLONE_NEWIPC |
-      CLONE_NEWCGROUP |
-      SIGCHLD,
-      &entrypoint_args);
-
-  if (child < 0) goto cleanup;
-  printf("[SANDBOX] running process %d\n", child);
-
-  /* Parent closes child's end of socket */
-  close(sockfd[1]);
-
-  ret = setup_userns_mappings(child, uid, gid);
-  if (ret) {
-    send_msg(sockfd[0], MSG_PARENT_ERROR, errno);
-    goto cleanup;
-  }
-
-  /* 6. Tell child mappings are done */
-  if (send_msg(sockfd[0], MSG_PARENT_MAPPINGS_DONE, 0) < 0) {
-    goto cleanup;
-  }
-
-  /* 1. Wait for child to be ready (initial setup) */
-  if (recv_msg(sockfd[0], &msg) < 0) {
-    fprintf(stderr, "[SANDBOX] failed to receive READY from child\n");
-    goto cleanup;
-  }
-
-  if (msg.type == MSG_CHILD_ERROR) {
-    fprintf(stderr, "[SANDBOX] child reported error: %s\n", strerror(msg.data));
-    goto cleanup;
-  }
-
-  if (msg.type != MSG_CHILD_READY) {
-    fprintf(stderr, "[SANDBOX] unexpected message from child: %d\n", msg.type);
-    goto cleanup;
-  }
-
-  /* 2. Setup network, cgroup, eBPF */
-  ret = setup_network(s, child);
-  if (ret) {
-    send_msg(sockfd[0], MSG_PARENT_ERROR, errno);
-    goto cleanup;
-  }
-
-  ret = cgroup_create("uav-cgroup");
-  if (ret) {
-    send_msg(sockfd[0], MSG_PARENT_ERROR, errno);
-    goto cleanup;
-  }
-
-  ret = cgroup_add_pid("uav-cgroup", child);
-  if (ret) {
-    send_msg(sockfd[0], MSG_PARENT_ERROR, errno);
-    goto cleanup;
-  }
-
-  ret = cgroup_set_limits("uav-cgroup", &s->limits);
-  if (ret) {
-    send_msg(sockfd[0], MSG_PARENT_ERROR, errno);
-    goto cleanup;
-  }
-
-  s->skel = sandbox_bpf__open();
-  if (!s->skel) {
-    send_msg(sockfd[0], MSG_PARENT_ERROR, errno);
-    goto cleanup;
-  }
-
-  cgid = cgroup_getid("uav-cgroup");
-  if (!cgid) {
-    send_msg(sockfd[0], MSG_PARENT_ERROR, errno);
-    goto cleanup;
-  }
-
-  s->skel->rodata->target_cgroup_id = cgid;
-
-  ret = sandbox_bpf__load(s->skel);
-  if (ret) {
-    send_msg(sockfd[0], MSG_PARENT_ERROR, errno);
-    goto cleanup;
-  }
-
-  ret = sandbox_bpf__attach(s->skel);
-  if (ret) {
-    send_msg(sockfd[0], MSG_PARENT_ERROR, errno);
-    goto cleanup;
-  }
-
-  /* 3. Tell child to continue */
-  if (send_msg(sockfd[0], MSG_PARENT_GO, 0) < 0) {
-    goto cleanup;
-  }
-
-  /* 7. Wait for child to complete */
-  if (recv_msg(sockfd[0], &msg) >= 0) {
-    if (msg.type == MSG_CHILD_EXIT) {
-      printf("[SANDBOX] child setup completed successfully\n");
-    } else if (msg.type == MSG_CHILD_ERROR) {
-      fprintf(stderr, "[SANDBOX] child final error: %s\n", strerror(msg.data));
-      ret = 1;
+  /* Set ownership for overlay layers */
+  const char *subdirs[] = { "/merged", "/upper", "/work", "" };
+  for (int i = 0; i < 4; i++) {
+    char *p;
+    if (asprintf(&p, "%s%s", s->overlay_path, subdirs[i]) != -1) {
+      chown(p, uid, gid);
+      free(p);
     }
   }
 
+  child = clone(sandbox_entrypoint, s->stack + s->limits.stack_size,
+      CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWNET |
+      CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWCGROUP | SIGCHLD,
+      &entrypoint_args);
+  if (child < 0) {
+    fprintf(stderr, "[SANDBOX] clone: %s\n", strerror(errno));
+    goto cleanup;
+  }
+
+  close(sockfd[1]); sockfd[1] = -1;
+
+  ret = setup_userns_mappings(child, uid, gid);
+  if (ret) { send_msg(sockfd[0], MSG_PARENT_ERROR, errno); goto cleanup; }
+
+  ret = send_msg(sockfd[0], MSG_PARENT_MAPPINGS_DONE, 0);
+  if (ret < 0) goto cleanup;
+
+  /* Sync with child setup */
+  ret = recv_msg(sockfd[0], &msg);
+  if (ret < 0 || msg.type == MSG_CHILD_ERROR) {
+    fprintf(stderr, "[SANDBOX] child setup failed\n");
+    goto cleanup;
+  }
+
+  /* Resource Setup */
+
+  /* Setup network */
+  ret = setup_network(s, child);
+  if (ret) goto cleanup;
+
+  /* Setup cgroup limits, add pid to cgroup */
+  ret = cgroup_create("uav-cgroup");
+  if (ret) goto cleanup;
+
+  ret = cgroup_add_pid("uav-cgroup", child);
+  if (ret) goto cleanup;
+
+  ret = cgroup_set_limits("uav-cgroup", &s->limits);
+  if (ret) goto cleanup;
+
+  /* Load sandbox bpf program */
+  s->skel = sandbox_bpf__open();
+  if (!s->skel) goto cleanup;
+
+  cgid = cgroup_getid("uav-cgroup");
+  s->skel->rodata->target_cgroup_id = cgid;
+
+  ret = sandbox_bpf__load(s->skel);
+  if (ret) goto cleanup;
+
+  ret = sandbox_bpf__attach(s->skel);
+  if (ret) goto cleanup;
+
+  /* Start capture on host side interface */
+  ret = pcap_start_capture(s);
+  if (ret) goto cleanup;
+
+  /* Final Release */
+  ret = send_msg(sockfd[0], MSG_PARENT_GO, 0);
+  if (ret < 0) goto cleanup;
+
+  /* Wait for confirmation or exit */
+  recv_msg(sockfd[0], &msg); 
+
   waitpid(child, &wstatus, 0);
+  ret = (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) == 0) ? 0 : 1;
 
-  if (WIFEXITED(wstatus)) {
-    const int es = WEXITSTATUS(wstatus);
-    fprintf(stderr, "[SANDBOX] process exited status=%d\n", es);
-    if(es != 0) ret = 1;
-  } else if (WIFSIGNALED(wstatus)) {
-    fprintf(stderr, "[SANDBOX] process killed by signal %d\n", WTERMSIG(wstatus));
-  } else if (WIFSTOPPED(wstatus)) {
-    fprintf(stderr, "[SANDBOX] process stopped by signal %d\n", WSTOPSIG(wstatus));
-  }
-
-  ret = 0;  /* Success if we got here */
-
+  pcap_stop_capture(s);
 cleanup:
-  /* Cleanup logic */
-  if (s->skel) {
-    sandbox_bpf__destroy(s->skel);
-    s->skel = NULL;
-  }
-
+  if (s->skel) { sandbox_bpf__destroy(s->skel); s->skel = NULL; }
   if (sockfd[0] != -1) close(sockfd[0]);
   if (sockfd[1] != -1) close(sockfd[1]);
-
-  if (path) free(path);
-
-  if (ret && child > 0) {
-    kill(child, SIGKILL);
-  }
-
-  if(ret) {
-    fprintf(stderr, "[SANDBOX] error during sandboxed execution: %s\n", strerror(errno));
-  }
+  if (ret != 0 && child > 0) kill(child, SIGKILL);
 
   return ret;
 }
 
 /* Destroy a sandbox by removing its filesystem tree */
 void uav_sandbox_destroy(struct uav_sandbox *s) {
+  if (!s) return;
   int ret;
-  size_t len;
   char *path = NULL;
 
-  const char *dirs[] = {
-    // "/merged/dev/pts",
-    // "/merged/dev",
-    "/merged",
-    NULL
-  };
-
-  len = strlen(s->overlay_path) + strlen("/merged/dev/pts") + 1;
-  path = malloc(len);
-  if(!path) return;
-
-  for(const char **p = dirs; *p != NULL; p++) {
-    snprintf(path, len, "%s%s", s->overlay_path, *p);
-    ret = umount2(path, MNT_FORCE);
-    if(ret) fprintf(stderr, "[SANDBOX] cannot unmount %s: %s\n", path, strerror(errno)); 
+  /* Unmount merged directory */
+  if (asprintf(&path, "%s/merged", s->overlay_path) != -1) {
+    ret = umount2(path, MNT_FORCE | MNT_DETACH);
+    if (ret && errno != EINVAL) {
+      fprintf(stderr, "[SANDBOX] cannot unmount %s: %s\n", path, strerror(errno));
+    }
+    free(path);
   }
 
-  free(path);
-  path = NULL;
-
-  /* Remove tree */
   ret = rmtree(s->overlay_path);
-  if(ret) fprintf(stderr, "[SANDBOX] cannot remove tree at %s: %s\n", s->overlay_path, strerror(errno));
+  if (ret) {
+    fprintf(stderr, "[SANDBOX] cannot remove tree %s: %s\n", s->overlay_path, strerror(errno));
+  }
 
-  /* Remove the stack */
-  if(s->stack) free(s->stack);
-  s->stack = NULL;
+  if (s->stack) {
+    free(s->stack);
+    s->stack = NULL;
+  }
 }
 
 /* Entrypoint process for sandbox. This should PID 1 for this namespace. The entrypoint coordinates
@@ -389,174 +298,165 @@ void uav_sandbox_destroy(struct uav_sandbox *s) {
  * */
 static int sandbox_entrypoint(void *args_) {
   int ret;
-  char *newroot, *oldroot, *path = NULL, options[64];
+  char *newroot = NULL, *oldroot = NULL, *path = NULL, *proc_path = NULL;
+  char options[64];
   struct sandbox_entrypoint_args *args = args_;
   const struct uav_sandbox *s = args->s;
   int sockfd = args->comm_sock;
   const char *err_msg = NULL;
   struct sandbox_msg msg;
 
-  size_t newroot_len = strlen(s->overlay_path) + strlen("/merged") + 1;
-  size_t oldroot_len = strlen(s->overlay_path) + strlen("/merged") + strlen("/oldroot") + 1;
-  size_t pathlen = strlen(s->overlay_path) + strlen("/merged/entrypoint.sh") + 1;
+  /* Construct paths safely */
+  if (asprintf(&newroot, "%s/merged", s->overlay_path) == -1) goto fail_nomem;
+  if (asprintf(&oldroot, "%s/merged/oldroot", s->overlay_path) == -1) goto fail_nomem;
+  if (asprintf(&path, "%s/merged/entrypoint.sh", s->overlay_path) == -1) goto fail_nomem;
+  if (asprintf(&proc_path, "%s/proc", newroot) == -1) goto fail_nomem;
 
-  newroot = malloc(newroot_len);
-  oldroot = malloc(oldroot_len);
-  path = malloc(pathlen);
-
-  if(!newroot || !oldroot || !path) {
-    send_msg(sockfd, MSG_CHILD_ERROR, ENOMEM);
+  /* Wait for parent mapping */
+  ret = recv_msg(sockfd, &msg);
+  if (ret < 0 || msg.type != MSG_PARENT_MAPPINGS_DONE) {
+    err_msg = "recv_msg: mappings not done";
     goto fail;
   }
 
-  if (recv_msg(sockfd, &msg) < 0 || msg.type != MSG_PARENT_MAPPINGS_DONE) {
-    err_msg = "failed to receive mappings done";
-    goto fail;
-  }
-
+  /* Downgrade to uid 0 and gid 0 */
   ret = setresgid(0, 0, 0);
-  if (ret < 0) {
-    err_msg = "setresgid(0, 0, 0)";
-    goto fail;
-  }
+  if (ret < 0) { err_msg = "setresgid"; goto fail; }
 
   ret = setresuid(0, 0, 0);
-  if (ret < 0) {
-    err_msg = "setresuid(0, 0, 0)";
-    goto fail;
-  }
+  if (ret < 0) { err_msg = "setresuid"; goto fail; }
 
   /* Write entrypoint */
-  snprintf(path, pathlen, "%s/merged/entrypoint.sh", s->overlay_path);
   ret = write_file_str(path, entrypoint);
-  if(ret) goto fail;
+  if (ret) { err_msg = "write_file_str: entrypoint"; goto fail; }
 
-  /* 1. Setup Mount Namespace */
+  /* 1. Setup Mount Namespace. Make / private */
   ret = mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL);
-  if (ret < 0) {
-    err_msg = "mount(/, MS_PRIVATE)";
-    send_msg(sockfd, MSG_CHILD_ERROR, errno);
-    goto fail;
-  }
-
-  /* 2. Prepare paths */
-  snprintf(newroot, newroot_len, "%s/merged", s->overlay_path);
-  snprintf(oldroot, oldroot_len, "%s/merged/oldroot", s->overlay_path);
+  if (ret < 0) { err_msg = "mount: make / private"; goto fail; }
 
   /* 3. Bind mount newroot */
   ret = mount(newroot, newroot, NULL, MS_BIND | MS_REC, NULL);
-  if (ret < 0) {
-    err_msg = "bind mount newroot";
-    send_msg(sockfd, MSG_CHILD_ERROR, errno);
-    goto fail;
-  }
+  if (ret < 0) { err_msg = "mount: bind newroot"; goto fail; }
 
-  /* 3. MOUNT PROC BEFORE PIVOT (The Fix) */
-  // We mount the container's proc into the directory that WILL become /proc
-  char proc_path[PATH_MAX];
-  snprintf(proc_path, sizeof(proc_path), "%s/proc", newroot);
-
+  /* Mount proc before pivot_root */
   mkdir(proc_path, 0555);
-  // In rootless mode, the flags MS_NOSUID | MS_NOEXEC | MS_NODEV are often required
   ret = mount("proc", proc_path, "proc", MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL);
-  if (ret < 0) {
-    err_msg = "pre-pivot mount proc";
-    send_msg(sockfd, MSG_CHILD_ERROR, errno);
-    goto fail;
-  }
+  if (ret < 0) { err_msg = "mount: proc"; goto fail; }
 
-  /* 4. File operations before pivot */
+  /* Copy the target file in /malware.sh */
   ret = sandbox_copyfile(s, args->hostprogram, "/malware.sh");
-  if (ret != 0) {
-    err_msg = "copy malware.sh";
-    send_msg(sockfd, MSG_CHILD_ERROR, errno);
-    goto fail;
-  }
+  if (ret != 0) { err_msg = "sandbox_copyfile"; goto fail; }
 
   ret = mkdir(oldroot, 0777);
-  if (ret < 0 && errno != EEXIST) {
-    err_msg = "mkdir oldroot";
-    send_msg(sockfd, MSG_CHILD_ERROR, errno);
-    goto fail;
-  }
-  /* 5. The Pivot */
+  if (ret < 0 && errno != EEXIST) { err_msg = "mkdir: oldroot"; goto fail; }
 
+  /* Pivot root and detach from the oldroot */
   ret = syscall(SYS_pivot_root, newroot, oldroot);
-  if (ret < 0) {
-    err_msg = "pivot_root";
-    send_msg(sockfd, MSG_CHILD_ERROR, errno);
-    goto fail;
-  }
+  if (ret < 0) { err_msg = "pivot_root"; goto fail; }
 
   ret = chdir("/");
-  if (ret < 0) {
-    err_msg = "chdir(/)";
-    send_msg(sockfd, MSG_CHILD_ERROR, errno);
-    goto fail;
-  }
+  if (ret < 0) { err_msg = "chdir: /"; goto fail; }
 
-  /* 6. Cleanup Host Links */
   ret = umount2("/oldroot", MNT_DETACH);
-  if (ret < 0) {
-    err_msg = "umount2(oldroot)";
-    send_msg(sockfd, MSG_CHILD_ERROR, errno);
-    goto fail;
-  }
+  if (ret < 0) { err_msg = "umount2: oldroot"; goto fail; }
 
   ret = rmdir("/oldroot");
-  if (ret < 0) {
-    err_msg = "rmdir(oldroot)";
-    send_msg(sockfd, MSG_CHILD_ERROR, errno);
-    goto fail;
-  }
-  rmdir("/oldroot");
+  if (ret < 0) { err_msg = "rmdir: oldroot"; goto fail; }
 
+  /* Mount tmpfs in /tmp */
   snprintf(options, sizeof(options), "size=%zu", s->limits.tmpfs_size);
   mkdir("/tmp", 0755);
   ret = mount("tmpfs", "/tmp", "tmpfs", 0, options);
-  if(ret) {
-    err_msg = "mount /tmp";
-    goto fail;
+  if (ret) { err_msg = "mount: /tmp"; goto fail; }
+
+  /* Mount /dev */
+  mkdir("/dev", 0755);
+  ret = mount("tmpfs", "/dev", "tmpfs", MS_NOSUID | MS_STRICTATIME, "mode=755");
+  if (ret < 0) { err_msg = "mount: /dev tmpfs"; goto fail; }
+
+  // 2. Define the essential devices to "pass through"
+  const char *devs[] = {
+    "/dev/null",
+    "/dev/zero",
+    "/dev/full",
+    "/dev/random",
+    "/dev/urandom",
+    "/dev/tty"
+  };
+
+  for (int i = 0; i < 5; i++) {
+    char target[64];
+    snprintf(target, sizeof(target), "%s", devs[i]);
+
+    /* Create a dummy file to act as the bind mount target */
+    int fd = open(target, O_RDONLY | O_CREAT, 0666);
+    if (fd >= 0) close(fd);
+
+    /* Bind mount from the host's /dev to our new /dev */
+    ret = mount(devs[i], target, NULL, MS_BIND, NULL);
+    if (ret < 0) {
+      // Log it, but maybe don't fail if /dev/tty is missing on some systems
+      fprintf(stderr, "Warning: could not bind mount %s\n", devs[i]);
+    }
   }
 
-  /* 14. Final setup */
+  /* Symlink */
+  symlink("/proc/self/fd", "/dev/fd");
+  symlink("/proc/self/fd/0", "/dev/stdin");
+  symlink("/proc/self/fd/1", "/dev/stdout");
+  symlink("/proc/self/fd/2", "/dev/stderr");
+
+  mkdir("/dev/pts", 0755);
+  ret = mount("devpts", "/dev/pts", "devpts", 0, "newinstance,ptmxmode=0666,mode=0620");
+  if (ret) { err_msg = "mount devpts"; goto fail; }
+
+  /* Set hostname to sandbox id. This is fine since we a CLONE_NEWUTS in clone */
   ret = sethostname(s->id, strlen(s->id));
-  if(ret) {
-    err_msg = "sethostname";
-    goto fail;
-  }
+  if (ret) { err_msg = "sethostname"; goto fail; }
 
   mkdir("/etc", 0755);
   write_file_str("/etc/hostname", s->id);
 
-  /* 8. Signal parent that we're ready for network/cgroup setup */
-  if (send_msg(sockfd, MSG_CHILD_READY, 0) < 0) {
-    goto fail;
-  }
+  /* 8. Signal parent ready */
+  ret = send_msg(sockfd, MSG_CHILD_READY, 0);
+  if (ret < 0) { err_msg = "send_msg: READY"; goto fail; }
 
-  /* 9. Wait for parent to finish network/cgroup setup */
-  if (recv_msg(sockfd, &msg) < 0 || msg.type != MSG_PARENT_GO) {
-    err_msg = "failed to receive GO from parent";
+  /* 9. Wait for parent GO */
+  ret = recv_msg(sockfd, &msg);
+  if (ret < 0 || msg.type != MSG_PARENT_GO) {
+    err_msg = "recv_msg: GO";
     goto fail;
   }
 
   /* 15. Clean up and exec */
-  free(oldroot);
-  free(newroot);
-
-  /* Signal successful setup */
   send_msg(sockfd, MSG_CHILD_EXIT, 0);
   close(sockfd);
 
-  /* 16. Execute as PID 1 */
+  free(oldroot); free(newroot); free(path); free(proc_path);
+
   char *const argv[] = { "/bin/sh", "/entrypoint.sh", "/malware.sh", NULL };
-  execv("/bin/sh", argv);
+  char *const envp[] = {
+    "PATH=/bin:/sbin:/usr/bin",
+    "TERM=xterm",
+    "HOME=/root",
+    "PS1=(\\u@\\h):\\w>",
+    NULL 
+  };
+  execve("/bin/sh", argv, envp);
+
+  /* If execve returns there is an error */
+  err_msg = "execve";
+
 fail:
   if (err_msg) {
-    fprintf(stderr, "[SANDBOX] cannot start process %s: %s\n", err_msg, strerror(errno));
+    fprintf(stderr, "[SANDBOX] child failure at %s: %s\n", err_msg, strerror(errno));
+    send_msg(sockfd, MSG_CHILD_ERROR, errno);
   }
-  if(oldroot) free(oldroot);
-  if(newroot) free(newroot);
+  free(oldroot); free(newroot); free(path); free(proc_path);
+  _exit(1);
+
+fail_nomem:
+  send_msg(sockfd, MSG_CHILD_ERROR, ENOMEM);
   _exit(1);
 }
 
