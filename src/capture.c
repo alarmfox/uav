@@ -83,7 +83,7 @@ static void *pcap_capture_loop(void *args_) {
     pthread_exit(0);
   }
 
-  snprintf(path, PATH_MAX, "%s.pcap", args->name);
+  snprintf(path, PATH_MAX, "/tmp/%s.pcap", args->name);
 
   dumper = pcap_dump_open(handle, path);
   if (!dumper) {
