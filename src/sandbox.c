@@ -1,5 +1,4 @@
 #include <grp.h>
-#include <linux/netlink.h>
 #include <net/if.h>
 #include <poll.h>
 #include <pthread.h>
@@ -51,7 +50,7 @@ struct sandbox_entrypoint_args {
 };
 
 /* These 2 function are implemented in src/capture.c because we cannot put together libbpf and libpcap stuff.
- * More on: https://github.com/libbpf/libbpf/issues/376 */
+ * More on https://github.com/libbpf/libbpf/issues/376 */
 int pcap_start_capture(struct uav_sandbox *);
 int pcap_stop_capture(struct uav_sandbox *);
 
@@ -105,7 +104,7 @@ int uav_sandbox_base_bootstrap(struct uav_sandbox *si, const char *sandbox_dir) 
  * later use */
 int uav_sandbox_configure(struct uav_sandbox *s, const struct uav_cgroup_limits *limits, const struct uav_sandbox_config *config) {
   /* Create the ovelayfs. This creates a unique temporary directory */
-  char template[] = "uav_sandbox_XXXXXX";
+  char template[] = "/tmp/uav_sandbox_XXXXXX";
   char *p = NULL;
   size_t len = 0;
 
@@ -163,7 +162,9 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   struct sandbox_entrypoint_args entrypoint_args = {0};
   struct sandbox_msg msg;
 
-  if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockfd) < 0) {
+  /* Init communication socket  */
+  ret = socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockfd);
+  if (ret < 0) {
     fprintf(stderr, "[SANDBOX] socketpair: %s\n", strerror(errno));
     return 1;
   }
@@ -189,9 +190,16 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   }
 
   child = clone(sandbox_entrypoint, s->stack + s->limits.stack_size,
-      CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWNET |
-      CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWCGROUP | SIGCHLD,
+      CLONE_NEWUSER |
+      CLONE_NEWPID |
+      CLONE_NEWNS |
+      CLONE_NEWNET |
+      CLONE_NEWUTS |
+      CLONE_NEWIPC |
+      CLONE_NEWCGROUP |
+      SIGCHLD,
       &entrypoint_args);
+
   if (child < 0) {
     fprintf(stderr, "[SANDBOX] clone: %s\n", strerror(errno));
     goto cleanup;
@@ -280,18 +288,20 @@ void uav_sandbox_destroy(struct uav_sandbox *s) {
     free(path);
   }
 
+  /* Remove sandbox runtime path */
   ret = rmtree(s->overlay_path);
   if (ret) {
     fprintf(stderr, "[SANDBOX] cannot remove tree %s: %s\n", s->overlay_path, strerror(errno));
   }
 
+  /* Free stack */
   if (s->stack) {
     free(s->stack);
     s->stack = NULL;
   }
 }
 
-/* Entrypoint process for sandbox. This should PID 1 for this namespace. The entrypoint coordinates
+/* Entrypoint process for sandbox. This is PID 1 for this namespace. The entrypoint coordinates
  * with parent for networking and some configuration (ie. attach the eBPF to the specific process).
  * The function uses private mount /, pivot_root to create a fully isolated process.
  * */
@@ -385,7 +395,6 @@ static int sandbox_entrypoint(void *args_) {
     "/dev/full",
     "/dev/random",
     "/dev/urandom",
-    "/dev/tty"
   };
 
   for (int i = 0; i < 5; i++) {
