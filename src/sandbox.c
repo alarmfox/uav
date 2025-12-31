@@ -1,4 +1,5 @@
 #include <grp.h>
+#include <linux/netlink.h>
 #include <net/if.h>
 #include <poll.h>
 #include <pthread.h>
