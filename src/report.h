@@ -67,6 +67,5 @@ struct uav_report {
 /* Report generation and output */
 int uav_report_generate(const char *filepath, struct uav_report *report);
 void uav_report_print(const struct uav_report *report);
-const char *uav_filetype_string(enum uav_filetype type);
 
 #endif /* __UAV_REPORT_H */
