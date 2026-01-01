@@ -34,8 +34,8 @@ More information in [doc/](./doc/).
 
 **Build:**
 - libbpf (for eBPF program loading)
-- OpenSSL libcrypto (for SHA-256 computation)
-- libzip (for busybox archive extraction)
+- OpenSSL libcrypto (for hash computation)
+- libzip (for archive extraction)
 - libpcap (sandbox traffic capture)
 
 ## Building
