@@ -70,7 +70,7 @@ User can run test with:
 make test
 ```
 
-If they have Valgrind the test can be run with:
+If they have Valgrind, the test can be run with:
 ```sh
 make valgrind
 ```
