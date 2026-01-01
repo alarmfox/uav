@@ -45,6 +45,12 @@ make
 
 This produces the `uav` binary.
 
+### Scan a file
+To issue a simple file scan:
+```sh
+sudo ./uav scan <suspicious-file>
+```
+
 ### Run a sandbox
 To run a program in a sandbox:
 ```sh
