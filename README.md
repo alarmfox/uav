@@ -17,7 +17,7 @@ to give some advanced tool to do some malware analysis to experienced users.
 programs
 - scan mode: scan a file providing a report with information like signature
 
-More information in [docs](./docs/).
+More information in [doc/](./doc/).
 
 **eBPF Integration:**
 - LSM (Linux Security Module) hooks for mandatory access control
