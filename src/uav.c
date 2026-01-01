@@ -6,14 +6,27 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "report.h"
 #include "sandbox.h"
 #include "utils.h"
 
 /* Command help */
 static void print_scan_help(void) {
   printf("Usage: uav scan [options] <file>\n\n");
-  printf("Scan a file for malware signatures.\n");
-  printf("(Not yet implemented)\n");
+  printf("Scan a file for malware indicators and generate a detailed report.\n\n");
+  printf("Options:\n");
+  printf("  -h, --help          Show this help message\n\n");
+  printf("Arguments:\n");
+  printf("  file                File to scan and analyze\n\n");
+  printf("Report includes:\n");
+  printf("  - Cryptographic hashes (MD5, SHA-1, SHA-256)\n");
+  printf("  - File type detection from magic bytes\n");
+  printf("  - Suspicion index (0.0 = clean, 1.0 = highly suspicious)\n");
+  printf("  - Signature matching against known malware database\n\n");
+  printf("Examples:\n");
+  printf("  uav scan suspicious.sh\n");
+  printf("  uav scan /tmp/unknown_binary\n");
+  printf("  uav scan document.pdf\n");
 }
 
 static void print_protect_help(void) {
@@ -151,12 +164,58 @@ cleanup:
   return ret;
 }
 
-/* Help functions */
+/* Scan function */
 static int cmd_scan(int argc, char **argv) {
-  (void)argc;
-  (void)argv;
-  fprintf(stderr, "Scan mode not yet implemented\n");
-  return 1;
+  int opt;
+  int ret = 1;
+  const char *filepath = NULL;
+  struct uav_report report = {0};
+
+  static const struct option long_options[] = {
+    { "help", no_argument, NULL, 'h' },
+    { NULL, 0, NULL, 0 }
+  };
+
+  while ((opt = getopt_long(argc, argv, "h", long_options, NULL)) != -1) {
+    switch (opt) {
+      case 'h':
+        print_scan_help();
+        return 0;
+      default:
+        print_scan_help();
+        return 1;
+    }
+  }
+
+  /* Require exactly one file argument */
+  if (optind >= argc) {
+    fprintf(stderr, "Error: No file specified\n\n");
+    print_scan_help();
+    return 1;
+  }
+
+  if (optind + 1 < argc) {
+    fprintf(stderr, "Error: Too many arguments (only one file at a time)\n\n");
+    print_scan_help();
+    return 1;
+  }
+
+  filepath = argv[optind];
+
+  /* Generate malware report */
+  ret = uav_report_generate(filepath, &report);
+  if (ret != 0) {
+    /* Report structure contains error details */
+    uav_report_print(&report);
+    goto cleanup;
+  }
+
+  /* Print the report */
+  uav_report_print(&report);
+  ret = 0;
+
+cleanup:
+  return ret;
 }
 
 static int cmd_protect(int argc, char **argv) {

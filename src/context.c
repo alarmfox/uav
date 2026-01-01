@@ -8,7 +8,7 @@
 #include "utils.h"
 /* Initialize av_context struct */
 // TODO: check configuration files signatures
-int uav_context_init(struct uav_context *ctx) {
+int uav_context_init(struct uav_context *ctx, const char *signfile) {
   /*
    * Format:
    * - preamble
@@ -19,7 +19,7 @@ int uav_context_init(struct uav_context *ctx) {
   char c; 
   int n = 0;
   long pos = 0;
-  FILE* file = fopen(MB_SHA256_FILE, "r");
+  FILE* file = fopen(signfile, "r");
 
   if(!file) return 1;
 
@@ -66,31 +66,6 @@ int uav_context_init(struct uav_context *ctx) {
 
   fclose(file);
   return 0;
-}
-
-/* Scan a single file. Compute its hash and compare against signature lists */
-int uav_context_scanfile(const struct uav_context *ctx, const char *path, unsigned char *odigest, int *diglen) {
-  ssize_t len;
-  unsigned char digest[256];
-  int ismalware = 0;
-  FILE *file = fopen(path, "rb");
-  assert(file);
-
-  len = calculate_sha256_from_file(file, digest);
-  fclose(file);
-
-  assert(digest);
-  assert(len == SHA256_DIGEST_LEN);
-
-  for(size_t i = 0; i < ctx->sigcount && !ismalware; ++i) {
-    if(compare_digest(digest, ctx->signatures[i], SHA256_DIGEST_LEN) == 0) ismalware = 1;
-  }
-
-  /* Save file digest in odigest */
-  memcpy(odigest, digest, SHA256_DIGEST_LEN);
-  if(diglen) *diglen = SHA256_DIGEST_LEN;
-
-  return ismalware;
 }
 
 void uav_context_free(struct uav_context *ctx) {

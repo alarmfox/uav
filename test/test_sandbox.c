@@ -21,13 +21,6 @@ static int test_sandbox_run_simple_program(void) {
   /* Create tempfile for test program */
   TEST_ASSERT_NOT_NULL(mktemp(template), "Should create temporary name");
 
-  /* Skip extraction for testing purposes */
-  s.initialized = 1;
-
-  /* Assume that there is a busybox fs in sandbox/ */
-  ret = uav_sandbox_base_bootstrap(&s, "sandbox");
-  TEST_ASSERT_EQ(0, ret, "Should bootstrap sandbox");
-
   /* Configure sandbox */
   const struct uav_sandbox_config config = {
     .hostip = "10.10.10.1",

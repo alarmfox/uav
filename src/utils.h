@@ -11,7 +11,6 @@ ssize_t digest_to_hex(const unsigned char *digest, int len, char *buf);
 ssize_t digest_from_hex(const char *buf, int len, unsigned char *digest);
 int compare_digest(const unsigned char *a, const unsigned char *b, int len);
 int zip_extract_directory(const char *src, const char *output_path);
-ssize_t calculate_sha256_from_file(FILE *file, unsigned char *digest);
 int copyfile(const char *src, const char *dst);
 int write_file(const char *path, const char *data, size_t len);
 int write_file_str(const char *path, const char *str);
