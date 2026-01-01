@@ -7,8 +7,6 @@
 
 #include "cgroup.h"
 
-static const char BUSYBOX_ZIP [] = "data/uav_sandbox_busybox.zip";
-
 /* Default limits */
 static const struct uav_cgroup_limits DEFAULT_LIMITS = {
   /* 128M */
@@ -62,15 +60,12 @@ struct uav_sandbox {
   struct sandbox_bpf *skel;
   /* Pointer to stack bottom: stack + limits.stack_size = stack_top */
   unsigned char *stack;
-  /* Signal to extract */
-  int initialized;
   /* Capture thread */
   pthread_t capture_thread;
   /* Stop fd eventfd */
   int capture_stopfd;
 };
 
-int uav_sandbox_base_bootstrap(struct uav_sandbox *si, const char *sandbox_dir);
 int uav_sandbox_configure(struct uav_sandbox *s, const struct uav_cgroup_limits *limits, const struct uav_sandbox_config *config);
 int uav_sandbox_run_program(struct uav_sandbox *s, const char *program);
 void uav_sandbox_destroy(struct uav_sandbox *s);

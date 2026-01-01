@@ -69,37 +69,6 @@ static int create_overlayfs(const char *base, const char *overlay_path);
 static int send_msg(int sockfd, enum sandbox_msg_type type, int data);
 static int recv_msg(int sockfd, struct sandbox_msg *msg);
 
-/* Create sandbox: extract zip directory in base root and copy entrypoint script. */
-int uav_sandbox_base_bootstrap(struct uav_sandbox *si, const char *sandbox_dir) {
-  int ret;
-
-  /* Save base directory */
-  strncpy(si->root, sandbox_dir, sizeof(si->root) - 1);
-  si->root[sizeof(si->root) - 1] = '\0';
-
-  /* Skip if already initialized */
-  if (si->initialized) return 0;
-
-  // Create sandbox root directory
-  ret = mkdir(sandbox_dir, 0755);
-  if (ret != 0 && errno != EEXIST) {
-    fprintf(stderr, "[SANDBOX] cannot create directory %s: %s\n", sandbox_dir, strerror(errno));
-    return -1;
-  }
-
-  /* Extract busybox zip into sandbox root */
-  ret = zip_extract_directory(BUSYBOX_ZIP, si->root);
-  if (ret != 0) {
-    fprintf(stderr, "[SANDBOX] cannot extract base sandbox filesystem: %s\n", strerror(errno));
-    rmtree(si->root);
-    return -1;
-  }
-
-  si->initialized = 1;
-
-  return 0;
-}
-
 /* Configure sandbox with runtime data. This includes overlayfs path, IPv4 addresses. This function
  * does not perform any action apart creating the base directory, but populates structure for
  * later use */
