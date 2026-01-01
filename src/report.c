@@ -7,7 +7,6 @@
 #include <openssl/evp.h>
 
 #include "report.h"
-#include "context.h"
 #include "utils.h"
 
 /* Magic number patterns for file type detection */
@@ -197,6 +196,23 @@ static void calculate_suspicion(struct uav_report *report, int sig_match) {
   safe_strcpy(report->suspicion.reason, reasons, sizeof(report->suspicion.reason));
 }
 
+/* Convert file type enum to human-readable string */
+static const char *filetype_to_string(enum uav_filetype type) {
+  switch (type) {
+    case UAV_FILE_ELF: return "ELF executable";
+    case UAV_FILE_PDF: return "PDF document";
+    case UAV_FILE_PNG: return "PNG image";
+    case UAV_FILE_JPEG: return "JPEG image";
+    case UAV_FILE_ZIP: return "ZIP archive";
+    case UAV_FILE_SCRIPT: return "Script (shebang)";
+    case UAV_FILE_PE: return "Windows PE executable";
+    case UAV_FILE_MACHO: return "macOS Mach-O executable";
+    case UAV_FILE_TEXT: return "Text file";
+    case UAV_FILE_UNKNOWN:
+    default: return "Unknown";
+  }
+}
+
 /* Generate complete malware report for a file */
 int uav_report_generate(const char *filepath, struct uav_report *report) {
   FILE *file = NULL;
@@ -272,23 +288,6 @@ cleanup:
   return ret;
 }
 
-/* Convert file type enum to human-readable string */
-const char *uav_filetype_string(enum uav_filetype type) {
-  switch (type) {
-    case UAV_FILE_ELF: return "ELF executable";
-    case UAV_FILE_PDF: return "PDF document";
-    case UAV_FILE_PNG: return "PNG image";
-    case UAV_FILE_JPEG: return "JPEG image";
-    case UAV_FILE_ZIP: return "ZIP archive";
-    case UAV_FILE_SCRIPT: return "Script (shebang)";
-    case UAV_FILE_PE: return "Windows PE executable";
-    case UAV_FILE_MACHO: return "macOS Mach-O executable";
-    case UAV_FILE_TEXT: return "Text file";
-    case UAV_FILE_UNKNOWN:
-    default: return "Unknown";
-  }
-}
-
 /* Print report to stdout */
 void uav_report_print(const struct uav_report *report) {
   if (!report) {
@@ -311,7 +310,7 @@ void uav_report_print(const struct uav_report *report) {
   printf("File Information:\n");
   printf("  Path:        %s\n", report->filepath);
   printf("  Size:        %zu bytes\n", report->filesize);
-  printf("  Type:        %s\n", uav_filetype_string(report->filetype));
+  printf("  Type:        %s\n", filetype_to_string(report->filetype));
   printf("  Permissions: %04o\n", report->filemode & 0777);
 
   /* Magic bytes (hex dump) */
