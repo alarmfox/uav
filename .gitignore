@@ -5,6 +5,7 @@ bpf/vmlinux.h
 # Include these directories and exclude everything else.
 !/.gitignore
 !/bpf
+!/doc
 !/src
 !/test
 !/Makefile
