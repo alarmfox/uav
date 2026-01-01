@@ -40,27 +40,28 @@ static void print_sandbox_help(void) {
 
 /* Command functions */
 static int cmd_sandbox(int argc, char **argv) {
-  const char *rootfs = "sandbox";  /* default */
-  const char *program = NULL;
+  int ret = 1;
+  int opt;
   int extract_zip = 0;
 
-  /* Parse options */
-  static struct option long_options[] = {
-    {"rootfs", required_argument, 0, 'r'},
-    {"help", no_argument, 0, 'h'},
-    {0, 0, 0, 0}
+  const char *rootfs_arg = NULL;   /* user-provided */
+  char *rootfs_path = NULL;        /* owned, possibly temp */
+  const char *program = NULL;
+
+  struct uav_sandbox s = {0};
+
+  static const struct option long_options[] = {
+    { "rootfs", required_argument, NULL, 'r' },
+    { "help",   no_argument,       NULL, 'h' },
+    { NULL,     0,                 NULL,  0  }
   };
 
-  int opt;
   while ((opt = getopt_long(argc, argv, "r:h", long_options, NULL)) != -1) {
     switch (opt) {
       case 'r':
-        rootfs = optarg;
-        /* Check if it's a zip file */
-        size_t len = strlen(rootfs);
-        if (len > 4 && strcmp(rootfs + len - 4, ".zip") == 0) {
-          extract_zip = 1;
-        }
+        rootfs_arg = optarg;
+        size_t len = strlen(rootfs_arg);
+        extract_zip = (len > 4 && strcmp(rootfs_arg + len - 4, ".zip") == 0);
         break;
       case 'h':
         print_sandbox_help();
@@ -71,66 +72,82 @@ static int cmd_sandbox(int argc, char **argv) {
     }
   }
 
-  /* Get program to run (if specified) */
+  if (!rootfs_arg) {
+    fprintf(stderr, "[SANDBOX] cannot start: missing rootfs\n");
+    return 1;
+  }
+
   if (optind < argc) {
     program = argv[optind];
   }
 
-  /* Execute sandbox logic */
-  int ret;
-  struct uav_sandbox s = {0};
-
+  /* Prepare rootfs */
   if (extract_zip) {
-    /* Extract zip to temporary directory */
     char template[] = "/tmp/uav_rootfs_XXXXXX";
-    if (mkdtemp(template) == NULL) {
-      fprintf(stderr, "Failed to create temp directory: %s\n", strerror(errno));
-      return 1;
+
+    if (!mkdtemp(template)) {
+      fprintf(stderr, "mkdtemp failed: %s\n", strerror(errno));
+      goto cleanup;
     }
 
-    ret = zip_extract_directory(rootfs, template);
-    if (ret != 0) {
+    if (zip_extract_directory(rootfs_arg, template) != 0) {
       fprintf(stderr, "Failed to extract rootfs: %s\n", strerror(errno));
       rmtree(template);
-      return 1;
+      goto cleanup;
     }
 
-    rootfs = template;
+    rootfs_path = strdup(template);
+    if (!rootfs_path) {
+      fprintf(stderr, "Out of memory\n");
+      rmtree(template);
+      goto cleanup;
+    }
+  } else {
+    rootfs_path = strdup(rootfs_arg);
+    if (!rootfs_path) {
+      fprintf(stderr, "Out of memory\n");
+      goto cleanup;
+    }
   }
 
-  strncpy(s.root, rootfs, sizeof(s.root) - 1);
-  s.root[sizeof(s.root) - 1] = '\0';
+  safe_strcpy(s.root, rootfs_path, PATH_MAX);
 
-  /* Configure with defaults */
   const struct uav_sandbox_config config = {
-    .hostip = "10.10.10.1",
-    .sandboxip = "10.10.10.2",
-    .hostifname = "veth1",
-    .sandboxifname = "veth2",
-    .prefix = 30,
+    .hostip         = "10.10.10.1",
+    .sandboxip      = "10.10.10.2",
+    .hostifname     = "veth1",
+    .sandboxifname  = "veth2",
+    .prefix         = 30,
   };
 
-  ret = uav_sandbox_configure(&s, NULL, &config);
-  if (ret != 0) {
+  if (uav_sandbox_configure(&s, NULL, &config) != 0) {
     fprintf(stderr, "Failed to configure sandbox: %s\n", strerror(errno));
     goto cleanup;
   }
 
-  /* Run program or shell */
   if (program) {
     ret = uav_sandbox_run_program(&s, program);
   } else {
-    /* Drop into shell - create a minimal shell script */
     const char shell_script[] = "/tmp/uav_shell.sh";
-    write_file_str(shell_script, "#!/bin/sh\nexec /bin/sh");
-    chmod(shell_script, 0755);
+
+    if (write_file_str(shell_script, "#!/bin/sh\nexec /bin/sh") != 0 ||
+        chmod(shell_script, 0755) != 0) {
+      fprintf(stderr, "Failed to create shell script: %s\n", strerror(errno));
+      goto cleanup;
+    }
+
     ret = uav_sandbox_run_program(&s, shell_script);
     unlink(shell_script);
   }
 
 cleanup:
   uav_sandbox_destroy(&s);
-  if(extract_zip) rmtree(rootfs);
+
+  if (extract_zip && rootfs_path) {
+    rmtree(rootfs_path);
+  }
+
+  free(rootfs_path);
   return ret;
 }
 
