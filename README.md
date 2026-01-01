@@ -45,6 +45,15 @@ make
 
 This produces the `uav` binary.
 
+### Run a sandbox
+To run a program in a sandbox:
+```sh
+sudo ./uav sandbox -r <path-to-rootfs> <suspicious-file>
+```
+
+If the rootfs ends with `.zip`, `uav` will attempt to extract it. If `suspicious-file` is not 
+specified an interactive shell will be dropped instead.
+
 ## Running tests
 
 > [!NOTE]
