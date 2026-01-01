@@ -51,8 +51,8 @@ To run a program in a sandbox:
 sudo ./uav sandbox -r <path-to-rootfs> <suspicious-file>
 ```
 
-If the rootfs ends with `.zip`, `uav` will attempt to extract it. If `suspicious-file` is not 
-specified an interactive shell will be dropped instead.
+If the rootfs ends with `.zip`, `uav` will attempt to extract it. If `suspicious-file` is not
+specified an interactive shell will be executed instead.
 
 ## Running tests
 
