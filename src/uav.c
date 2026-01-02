@@ -8,6 +8,7 @@
 
 #include "report.h"
 #include "sandbox.h"
+#include "scanner.h"
 #include "utils.h"
 
 /* Command help */
@@ -160,7 +161,7 @@ cleanup:
     rmtree(rootfs_path);
   }
 
-  free(rootfs_path);
+  if(rootfs_path) free(rootfs_path);
   return ret;
 }
 
@@ -168,19 +169,24 @@ cleanup:
 static int cmd_scan(int argc, char **argv) {
   int opt;
   int ret = 1;
-  const char *filepath = NULL;
+  const char *filepath = NULL, *yr_rules = NULL;
   struct uav_report report = {0};
+  struct uav_scanner scanner = { 0 };
 
   static const struct option long_options[] = {
     { "help", no_argument, NULL, 'h' },
+    { "yara-rules", required_argument, NULL, 'y' },
     { NULL, 0, NULL, 0 }
   };
 
-  while ((opt = getopt_long(argc, argv, "h", long_options, NULL)) != -1) {
+  while ((opt = getopt_long(argc, argv, "y:h", long_options, NULL)) != -1) {
     switch (opt) {
       case 'h':
         print_scan_help();
         return 0;
+      case 'y':
+        yr_rules = optarg;
+        break;
       default:
         print_scan_help();
         return 1;
@@ -202,8 +208,15 @@ static int cmd_scan(int argc, char **argv) {
 
   filepath = argv[optind];
 
+  /* Initialize scanner */
+  ret = uav_scanner_init(&scanner, yr_rules, NULL);
+  if(ret != 0) {
+    fprintf(stderr, "[ERROR] cannot initialize scanner: %s\n", strerror(errno));
+    goto cleanup;
+  }
+
   /* Generate malware report */
-  ret = uav_report_generate(filepath, &report);
+  ret = uav_report_generate(&scanner, filepath, &report);
   if (ret != 0) {
     /* Report structure contains error details */
     uav_report_print(&report);
@@ -215,6 +228,8 @@ static int cmd_scan(int argc, char **argv) {
   ret = 0;
 
 cleanup:
+  uav_scanner_free(&scanner);
+  uav_report_destroy(&report);
   return ret;
 }
 

@@ -155,37 +155,6 @@ perm:
   return 0;
 }
 
-/* Computes SHA256 from a file */
-ssize_t calculate_sha256_from_file(FILE *file, unsigned char *digest) {
-
-  if(!digest) return -1;
-
-  int ret;
-  EVP_MD_CTX *mdctx;
-  unsigned char buf[8192];
-  size_t nbytes;
-  unsigned int digestlen;
-
-  mdctx = EVP_MD_CTX_new();
-  assert(mdctx);
-
-  ret = EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL);
-  assert(ret == 1);
-
-  while ((nbytes = fread(buf, 1, sizeof(buf), file)), nbytes != 0) {
-    ret = EVP_DigestUpdate(mdctx, buf, nbytes);
-    assert(ret == 1);
-  }
-
-  ret = EVP_DigestFinal_ex(mdctx, digest, &digestlen);
-  assert(ret == 1);
-  assert(digestlen == SHA256_DIGEST_LEN);
-
-  EVP_MD_CTX_free(mdctx);
-
-  return digestlen;
-}
-
 static int unlink_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf) {
   (void)sb;
   (void)typeflag;
@@ -269,25 +238,47 @@ int write_file_str(const char *path, const char *str) {
   return write_file(path, str, strlen(str));
 }
 
-/* Read a file */
-ssize_t read_file(const char *path, char *buf, size_t size) {
-  int fd;
-  ssize_t nread;
+/* Read a file. The function returns a malloc string. It's up to the caller to free it*/
+char *read_file(const char *path, size_t *size) {
+  FILE *f = NULL;
+  char *data = NULL;
+  long fsize;
+  size_t nread;
 
-  fd = open(path, O_RDONLY);
-  if (fd < 0) {
+  f= fopen(path, "rb");
+  if (!f) {
     fprintf(stderr, "[UTILS] cannot open %s: %s\n", path, strerror(errno));
-    return -1;
+    goto cleanup;
   }
 
-  nread = read(fd, buf, size - 1);
-  close(fd);
+  fseek(f, 0, SEEK_END);
+  fsize = ftell(f);
+  fseek(f, 0, SEEK_SET);
 
-  if (nread < 0) {
-    fprintf(stderr, "[UTILS] read failed: %s\n", strerror(errno));
-    return -1;
+  /* Do not allocate too much */
+  if (fsize > 1024 * 1024 * 10) {
+    fprintf(stderr, "[ERROR] cannot read >10M file\n");
+    goto cleanup;
   }
 
-  buf[nread] = '\0';
-  return nread;
+  data = malloc(fsize + 1);
+
+  if(!data) {
+    fprintf(stderr, "[ERROR] out of memory\n");
+    goto cleanup;
+  }
+  *size = fsize;
+
+  nread = fread(data, 1, fsize, f);
+
+  if(nread != *size) {
+    free(data);
+    goto cleanup;
+  }
+
+  data[fsize] = 0;
+
+cleanup:
+  fclose(f);
+  return data;
 }

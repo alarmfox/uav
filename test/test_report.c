@@ -1,6 +1,6 @@
 #include "test.h"
 #include "report.h"
-#include "context.h"
+#include "scanner.h"
 #include "utils.h"
 
 #include <fcntl.h>

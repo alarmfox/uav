@@ -7,6 +7,7 @@
 #include <openssl/evp.h>
 
 #include "report.h"
+#include "scanner.h"
 #include "utils.h"
 
 /* Magic number patterns for file type detection */
@@ -214,7 +215,7 @@ static const char *filetype_to_string(enum uav_filetype type) {
 }
 
 /* Generate complete malware report for a file */
-int uav_report_generate(const char *filepath, struct uav_report *report) {
+int uav_report_generate(const struct uav_scanner *scanner, const char *filepath, struct uav_report *report) {
   FILE *file = NULL;
   struct stat st;
   int ret = -1;
@@ -237,8 +238,7 @@ int uav_report_generate(const char *filepath, struct uav_report *report) {
   /* Get file metadata */
   if (stat(filepath, &st) != 0) {
     report->error_code = errno;
-    snprintf(report->error_msg, sizeof(report->error_msg),
-        "Cannot stat file: %s", strerror(errno));
+    snprintf(report->error_msg, sizeof(report->error_msg),   "Cannot stat file: %s", strerror(errno));
     return -1;
   }
 
@@ -249,8 +249,7 @@ int uav_report_generate(const char *filepath, struct uav_report *report) {
   file = fopen(filepath, "rb");
   if (!file) {
     report->error_code = errno;
-    snprintf(report->error_msg, sizeof(report->error_msg),
-        "Cannot open file: %s", strerror(errno));
+    snprintf(report->error_msg, sizeof(report->error_msg),  "Cannot open file: %s", strerror(errno));
     return -1;
   }
 
@@ -258,8 +257,7 @@ int uav_report_generate(const char *filepath, struct uav_report *report) {
   report->magic_len = fread(report->magic, 1, sizeof(report->magic), file);
   if (report->magic_len == 0 && ferror(file)) {
     report->error_code = errno;
-    snprintf(report->error_msg, sizeof(report->error_msg),
-        "Cannot read magic bytes: %s", strerror(errno));
+    snprintf(report->error_msg, sizeof(report->error_msg), "Cannot read magic bytes: %s", strerror(errno));
     goto cleanup;
   }
 
@@ -274,6 +272,19 @@ int uav_report_generate(const char *filepath, struct uav_report *report) {
   }
 
   /* TODO: Check against malware signature database if available */
+  /* Scan imported against yara rules */
+  if(scanner->rules) {
+    struct uav_yara_match *matches;
+    size_t nmatch;
+    int ret;
+    ret = uav_yara_scan(scanner, filepath, &matches, &nmatch);
+    if(ret) {
+      fprintf(stderr, "[YARA ERROR]\n");
+      goto cleanup;
+    }
+
+    report->yr_matches = matches;
+  }
 
   /* Calculate suspicion index */
   calculate_suspicion(report, sig_match);
@@ -367,12 +378,10 @@ void uav_report_print(const struct uav_report *report) {
   }
 
   printf("  Indicators:\n");
-  printf("    - Signature match: %s\n", 
-      report->suspicion.signature_match ? "YES" : "no");
-  printf("    - Executable format: %s\n", 
-      report->suspicion.executable ? "YES" : "no");
-  printf("    - Unknown type: %s\n", 
-      report->suspicion.unknown_filetype ? "YES" : "no");
+  printf("    - Signature match: %s\n", report->suspicion.signature_match ? "YES" : "no");
+  printf("    - Executable format: %s\n", report->suspicion.executable ? "YES" : "no");
+  printf("    - Unknown type: %s\n", report->suspicion.unknown_filetype ? "YES" : "no");
+  printf("    - Yara rule matched: %lu\n", report->yr_nmatch);
   printf("  Reason: %s\n", report->suspicion.reason);
 
   /* Timestamp */
@@ -382,4 +391,11 @@ void uav_report_print(const struct uav_report *report) {
   printf("\n");
   printf("Scan Time: %s\n", timebuf);
   printf("================================\n");
+}
+
+
+void uav_report_destroy(struct uav_report *report) {
+  if(!report || report->yr_matches) return;
+
+  free(report->yr_matches);
 }

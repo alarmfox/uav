@@ -1,5 +1,5 @@
 CFLAGS  = -Wall -Wextra -D_GNU_SOURCE -D_XOPEN_SOURCE=500 -Isrc/ -std=c11
-LDFLAGS = -lbpf -lcrypto -lzip -lpcap
+LDFLAGS = -lbpf -lcrypto -lzip -lpcap -lm -lyara_x_capi
 BPFTOOL = bpftool
 EBPF_CFLAGS = -g -O2 -target bpf
 
@@ -12,7 +12,7 @@ endif
 TARGET = uav
 
 # Source files
-SRCS = src/uav.c src/sandbox.c src/context.c src/utils.c src/netlink.c src/cgroup.c src/capture.c src/report.c
+SRCS = src/uav.c src/sandbox.c src/scanner.c src/utils.c src/netlink.c src/cgroup.c src/capture.c src/report.c
 OBJS = $(SRCS:.c=.o)
 LIB_OBJS = $(filter-out src/uav.o, $(OBJS))
 

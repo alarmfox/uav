@@ -5,7 +5,7 @@
 #include <sys/types.h>
 #include <limits.h>
 
-struct uav_context;
+struct uav_scanner;
 
 /* File type classification based on magic numbers */
 enum uav_filetype {
@@ -55,6 +55,10 @@ struct uav_report {
   unsigned char magic[16];    /* First 16 bytes */
   size_t magic_len;
 
+  /* Yara scan */
+  struct uav_yara_match *yr_matches;
+  size_t yr_nmatch;
+
   /* Metadata */
   time_t scan_time;
   struct uav_suspicion suspicion;
@@ -65,7 +69,8 @@ struct uav_report {
 };
 
 /* Report generation and output */
-int uav_report_generate(const char *filepath, struct uav_report *report);
+int uav_report_generate(const struct uav_scanner *scanner, const char *filepath, struct uav_report *report);
 void uav_report_print(const struct uav_report *report);
+void uav_report_destroy(struct uav_report *report);
 
 #endif /* __UAV_REPORT_H */
