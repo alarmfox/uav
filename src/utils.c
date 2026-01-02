@@ -155,37 +155,6 @@ perm:
   return 0;
 }
 
-/* Computes SHA256 from a file */
-ssize_t calculate_sha256_from_file(FILE *file, unsigned char *digest) {
-
-  if(!digest) return -1;
-
-  int ret;
-  EVP_MD_CTX *mdctx;
-  unsigned char buf[8192];
-  size_t nbytes;
-  unsigned int digestlen;
-
-  mdctx = EVP_MD_CTX_new();
-  assert(mdctx);
-
-  ret = EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL);
-  assert(ret == 1);
-
-  while ((nbytes = fread(buf, 1, sizeof(buf), file)), nbytes != 0) {
-    ret = EVP_DigestUpdate(mdctx, buf, nbytes);
-    assert(ret == 1);
-  }
-
-  ret = EVP_DigestFinal_ex(mdctx, digest, &digestlen);
-  assert(ret == 1);
-  assert(digestlen == SHA256_DIGEST_LEN);
-
-  EVP_MD_CTX_free(mdctx);
-
-  return digestlen;
-}
-
 static int unlink_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf) {
   (void)sb;
   (void)typeflag;

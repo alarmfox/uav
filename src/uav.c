@@ -160,7 +160,7 @@ cleanup:
     rmtree(rootfs_path);
   }
 
-  free(rootfs_path);
+  if(rootfs_path) free(rootfs_path);
   return ret;
 }
 
