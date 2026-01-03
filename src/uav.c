@@ -16,6 +16,8 @@ static void print_scan_help(void) {
   printf("Usage: uav scan [options] <file>\n\n");
   printf("Scan a file for malware indicators and generate a detailed report.\n\n");
   printf("Options:\n");
+  printf("  -r, --yara-rules    Yara rules to load. This can be either a single file or a directory\n");
+  printf("                      (If directory all .yar file will be loaded)\n");
   printf("  -h, --help          Show this help message\n\n");
   printf("Arguments:\n");
   printf("  file                File to scan and analyze\n\n");
@@ -25,7 +27,7 @@ static void print_scan_help(void) {
   printf("  - Suspicion index (0.0 = clean, 1.0 = highly suspicious)\n");
   printf("  - Signature matching against known malware database\n\n");
   printf("Examples:\n");
-  printf("  uav scan suspicious.sh\n");
+  printf("  uav scan --yara-rules rules.yar suspicious.sh\n");
   printf("  uav scan /tmp/unknown_binary\n");
   printf("  uav scan document.pdf\n");
 }
@@ -228,7 +230,7 @@ static int cmd_scan(int argc, char **argv) {
   ret = 0;
 
 cleanup:
-  uav_scanner_free(&scanner);
+  uav_scanner_destroy(&scanner);
   uav_report_destroy(&report);
   return ret;
 }

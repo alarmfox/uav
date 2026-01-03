@@ -221,7 +221,7 @@ int uav_report_generate(const struct uav_scanner *scanner, const char *filepath,
   int ret = -1;
   int sig_match = 0;
 
-  if (!filepath || !report) {
+  if (!scanner || !filepath || !report) {
     errno = EINVAL;
     return -1;
   }
@@ -277,7 +277,7 @@ int uav_report_generate(const struct uav_scanner *scanner, const char *filepath,
     struct uav_yara_match *matches;
     size_t nmatch;
     int ret;
-    ret = uav_yara_scan(scanner, filepath, &matches, &nmatch);
+    ret = uav_scanner_scan_file_sync(scanner, filepath, &matches, &nmatch);
     if(ret) {
       fprintf(stderr, "[YARA ERROR]\n");
       goto cleanup;

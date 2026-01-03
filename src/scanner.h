@@ -18,7 +18,7 @@ struct uav_scanner {
 };
 
 int uav_scanner_init(struct uav_scanner *s, const char *yr_path, const char *sig_path);
-void uav_scanner_free(struct uav_scanner *s);
-int uav_yara_scan(const struct uav_scanner *s, const char *path, struct uav_yara_match **matches, size_t *nmatch);
+void uav_scanner_destroy(struct uav_scanner *s);
+int uav_scanner_scan_file_sync(const struct uav_scanner *s, const char *path, struct uav_yara_match **matches, size_t *nmatch);
 
 #endif // !__UAV_SCANNER_H

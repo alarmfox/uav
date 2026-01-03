@@ -1,7 +1,6 @@
 #include "test.h"
 #include "report.h"
 #include "scanner.h"
-#include "utils.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -31,15 +30,22 @@ static int test_report_null_handling(void) {
   TEST_CASE("report_generate - NULL pointer handling");
 
   struct uav_report report;
+  struct uav_scanner scanner;
   int ret;
 
+  ret = uav_scanner_init(&scanner, 0, 0);
+  TEST_ASSERT_EQ(0, ret, "Should initialize empty scanner");
+
   /* NULL filepath */
-  ret = uav_report_generate(NULL, &report);
+  ret = uav_report_generate(&scanner, NULL, &report);
   TEST_ASSERT_EQ(-1, ret, "Should reject NULL filepath");
 
   /* NULL report */
-  ret = uav_report_generate("/tmp/test", NULL);
+  ret = uav_report_generate(&scanner, "/tmp/test", NULL);
   TEST_ASSERT_EQ(-1, ret, "Should reject NULL report");
+
+  uav_scanner_destroy(&scanner);
+  uav_report_destroy(&report);
 
   TEST_SUCCESS();
 }
@@ -49,12 +55,19 @@ static int test_report_nonexistent_file(void) {
   TEST_CASE("report_generate - nonexistent file");
 
   struct uav_report report;
+  struct uav_scanner scanner;
   int ret;
 
-  ret = uav_report_generate("/nonexistent/path/file.txt", &report);
+  ret = uav_scanner_init(&scanner, 0, 0);
+  TEST_ASSERT_EQ(0, ret, "Should initialize empty scanner");
+
+  ret = uav_report_generate(&scanner, "/nonexistent/path/file.txt", &report);
   TEST_ASSERT_EQ(-1, ret, "Should fail on nonexistent file");
   TEST_ASSERT(report.error_code != 0, "Should set error code");
   TEST_ASSERT(strlen(report.error_msg) > 0, "Should set error message");
+
+  uav_scanner_destroy(&scanner);
+  uav_report_destroy(&report);
 
   TEST_SUCCESS();
 }
@@ -64,8 +77,12 @@ static int test_report_elf_file(void) {
   TEST_CASE("report_generate - ELF file detection");
 
   struct uav_report report;
+  struct uav_scanner scanner;
   char tempfile[] = "/tmp/test_elf_XXXXXX";
   int fd, ret;
+
+  ret = uav_scanner_init(&scanner, 0, 0);
+  TEST_ASSERT_EQ(0, ret, "Should initialize empty scanner");
 
   /* Create temporary file */
   fd = mkstemp(tempfile);
@@ -84,7 +101,7 @@ static int test_report_elf_file(void) {
   TEST_ASSERT_EQ(0, ret, "Should write test file");
 
   /* Generate report */
-  ret = uav_report_generate(tempfile, &report);
+  ret = uav_report_generate(&scanner, tempfile, &report);
   TEST_ASSERT_EQ(0, ret, "Should generate report successfully");
 
   /* Verify file type detection */
@@ -109,6 +126,9 @@ static int test_report_elf_file(void) {
   /* Cleanup */
   unlink(tempfile);
 
+  uav_scanner_destroy(&scanner);
+  uav_report_destroy(&report);
+
   TEST_SUCCESS();
 }
 
@@ -117,6 +137,7 @@ static int test_report_png_file(void) {
   TEST_CASE("report_generate - PNG file detection");
 
   struct uav_report report;
+  struct uav_scanner scanner;
   char tempfile[] = "/tmp/test_png_XXXXXX";
   int fd, ret;
 
@@ -132,10 +153,13 @@ static int test_report_png_file(void) {
     0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10
   };
 
+  ret = uav_scanner_init(&scanner, 0, 0);
+  TEST_ASSERT_EQ(0, ret, "Should initialize empty scanner");
+
   ret = create_test_file(tempfile, png_content, sizeof(png_content), 0644);
   TEST_ASSERT_EQ(0, ret, "Should write test file");
 
-  ret = uav_report_generate(tempfile, &report);
+  ret = uav_report_generate(&scanner, tempfile, &report);
   TEST_ASSERT_EQ(0, ret, "Should generate report");
 
   TEST_ASSERT_EQ(UAV_FILE_PNG, report.filetype, "Should detect PNG file");
@@ -143,6 +167,8 @@ static int test_report_png_file(void) {
   TEST_ASSERT(!report.suspicion.executable, "PNG is not executable");
 
   unlink(tempfile);
+  uav_scanner_destroy(&scanner);
+  uav_report_destroy(&report);
   TEST_SUCCESS();
 }
 
@@ -151,6 +177,7 @@ static int test_report_pdf_file(void) {
   TEST_CASE("report_generate - PDF file detection");
 
   struct uav_report report;
+  struct uav_scanner scanner;
   char tempfile[] = "/tmp/test_pdf_XXXXXX";
   int fd, ret;
  
@@ -158,18 +185,23 @@ static int test_report_pdf_file(void) {
   TEST_ASSERT(fd >= 0, "Should create temp file");
   close(fd);
 
+  ret = uav_scanner_init(&scanner, 0, 0);
+  TEST_ASSERT_EQ(0, ret, "Should initialize empty scanner");
+
   /* PDF magic: 25 50 44 46 (%PDF) */
   const char *pdf_content = "%PDF-1.4\n%âãÏÓ\n";
 
   ret = create_test_file(tempfile, (const unsigned char *)pdf_content, strlen(pdf_content), 0644);
   TEST_ASSERT_EQ(0, ret, "Should write test file");
  
-  ret = uav_report_generate(tempfile, &report);
+  ret = uav_report_generate(&scanner, tempfile, &report);
   TEST_ASSERT_EQ(0, ret, "Should generate report");
 
   TEST_ASSERT_EQ(UAV_FILE_PDF, report.filetype, "Should detect PDF file");
 
   unlink(tempfile);
+  uav_scanner_destroy(&scanner);
+  uav_report_destroy(&report);
   TEST_SUCCESS();
 }
 
@@ -178,6 +210,7 @@ static int test_report_script_file(void) {
   TEST_CASE("report_generate - Script file detection");
 
   struct uav_report report;
+  struct uav_scanner scanner;
   char tempfile[] = "/tmp/test_script_XXXXXX";
   int fd, ret;
 
@@ -185,13 +218,16 @@ static int test_report_script_file(void) {
   TEST_ASSERT(fd >= 0, "Should create temp file");
   close(fd);
 
+  ret = uav_scanner_init(&scanner, 0, 0);
+  TEST_ASSERT_EQ(0, ret, "Should initialize empty scanner");
+
   const char *script_content = "#!/bin/sh\necho 'Hello World'\n";
 
   ret = create_test_file(tempfile, (const unsigned char *)script_content,
                         strlen(script_content), 0755);
   TEST_ASSERT_EQ(0, ret, "Should write test file");
 
-  ret = uav_report_generate(tempfile, &report);
+  ret = uav_report_generate(&scanner, tempfile, &report);
   TEST_ASSERT_EQ(0, ret, "Should generate report");
 
   TEST_ASSERT_EQ(UAV_FILE_SCRIPT, report.filetype, "Should detect script");
@@ -199,6 +235,8 @@ static int test_report_script_file(void) {
   TEST_ASSERT(report.suspicion.index > 0.2f, "Script should be somewhat suspicious");
 
   unlink(tempfile);
+  uav_scanner_destroy(&scanner);
+  uav_report_destroy(&report);
   TEST_SUCCESS();
 }
 
@@ -207,6 +245,7 @@ static int test_report_text_file(void) {
   TEST_CASE("report_generate - Text file detection");
 
   struct uav_report report;
+  struct uav_scanner scanner;
   char tempfile[] = "/tmp/test_text_XXXXXX";
   int fd, ret;
 
@@ -214,18 +253,23 @@ static int test_report_text_file(void) {
   TEST_ASSERT(fd >= 0, "Should create temp file");
   close(fd);
 
+  ret = uav_scanner_init(&scanner, 0, 0);
+  TEST_ASSERT_EQ(0, ret, "Should initialize empty scanner");
+
   const char *text_content = "This is a plain text file.\nWith multiple lines.\n";
 
   ret = create_test_file(tempfile, (const unsigned char *)text_content, strlen(text_content), 0644);
   TEST_ASSERT_EQ(0, ret, "Should write test file");
 
-  ret = uav_report_generate(tempfile, &report);
+  ret = uav_report_generate(&scanner, tempfile, &report);
   TEST_ASSERT_EQ(0, ret, "Should generate report");
 
   TEST_ASSERT_EQ(UAV_FILE_TEXT, report.filetype, "Should detect text file");
   TEST_ASSERT(report.suspicion.index == 0.0f, "Text file should be clean");
 
   unlink(tempfile);
+  uav_scanner_destroy(&scanner);
+  uav_report_destroy(&report);
   TEST_SUCCESS();
 }
 
@@ -234,12 +278,16 @@ static int test_report_unknown_file(void) {
   TEST_CASE("report_generate - Unknown file type");
 
   struct uav_report report;
+  struct uav_scanner scanner;
   char tempfile[] = "/tmp/test_unknown_XXXXXX";
   int fd, ret;
 
   fd = mkstemp(tempfile);
   TEST_ASSERT(fd >= 0, "Should create temp file");
   close(fd);
+
+  ret = uav_scanner_init(&scanner, 0, 0);
+  TEST_ASSERT_EQ(0, ret, "Should initialize empty scanner");
 
   /* Random binary data with no recognizable magic */
   unsigned char unknown_content[] = {
@@ -250,7 +298,7 @@ static int test_report_unknown_file(void) {
   ret = create_test_file(tempfile, unknown_content, sizeof(unknown_content), 0644);
   TEST_ASSERT_EQ(0, ret, "Should write test file");
 
-  ret = uav_report_generate(tempfile, &report);
+  ret = uav_report_generate(&scanner, tempfile, &report);
   TEST_ASSERT_EQ(0, ret, "Should generate report");
 
   TEST_ASSERT_EQ(UAV_FILE_UNKNOWN, report.filetype, "Should detect unknown type");
@@ -258,6 +306,8 @@ static int test_report_unknown_file(void) {
   TEST_ASSERT(report.suspicion.index > 0.0f, "Unknown should add suspicion");
 
   unlink(tempfile);
+  uav_scanner_destroy(&scanner);
+  uav_report_destroy(&report);
   TEST_SUCCESS();
 }
 
@@ -266,12 +316,16 @@ static int test_report_hash_verification(void) {
   TEST_CASE("report_generate - Hash verification");
 
   struct uav_report report;
+  struct uav_scanner scanner;
   char tempfile[] = "/tmp/test_hash_XXXXXX";
   int fd, ret;
 
   fd = mkstemp(tempfile);
   TEST_ASSERT(fd >= 0, "Should create temp file");
   close(fd);
+
+  ret = uav_scanner_init(&scanner, 0, 0);
+  TEST_ASSERT_EQ(0, ret, "Should initialize empty scanner");
 
   /* Known content: "Hello, World!" */
   const char *content = "Hello, World!";
@@ -285,7 +339,7 @@ static int test_report_hash_verification(void) {
   ret = create_test_file(tempfile, (const unsigned char *)content, strlen(content), 0644);
   TEST_ASSERT_EQ(0, ret, "Should write test file");
 
-  ret = uav_report_generate(tempfile, &report);
+  ret = uav_report_generate(&scanner, tempfile, &report);
   TEST_ASSERT_EQ(0, ret, "Should generate report");
 
   /* Verify MD5 (just check it's non-zero, exact match would be fragile) */
@@ -308,6 +362,8 @@ static int test_report_hash_verification(void) {
   TEST_ASSERT(report.has_sha256, "Should have SHA256 flag");
 
   unlink(tempfile);
+  uav_scanner_destroy(&scanner);
+  uav_report_destroy(&report);
   TEST_SUCCESS();
 }
 
@@ -316,6 +372,7 @@ static int test_report_empty_file(void) {
   TEST_CASE("report_generate - Empty file");
 
   struct uav_report report;
+  struct uav_scanner scanner;
   char tempfile[] = "/tmp/test_empty_XXXXXX";
   int fd, ret;
 
@@ -323,11 +380,14 @@ static int test_report_empty_file(void) {
   TEST_ASSERT(fd >= 0, "Should create temp file");
   close(fd);
 
+  ret = uav_scanner_init(&scanner, 0, 0);
+  TEST_ASSERT_EQ(0, ret, "Should initialize empty scanner");
+
   /* Create empty file */
   ret = create_test_file(tempfile, NULL, 0, 0644);
   TEST_ASSERT_EQ(0, ret, "Should create empty file");
 
-  ret = uav_report_generate(tempfile, &report);
+  ret = uav_report_generate(&scanner, tempfile, &report);
   TEST_ASSERT_EQ(0, ret, "Should handle empty file");
   TEST_ASSERT_EQ(0, report.filesize, "Should report zero size");
 
@@ -335,6 +395,8 @@ static int test_report_empty_file(void) {
   TEST_ASSERT(report.has_md5, "Should still compute MD5 of empty file");
 
   unlink(tempfile);
+  uav_scanner_destroy(&scanner);
+  uav_report_destroy(&report);
   TEST_SUCCESS();
 }
 
@@ -343,11 +405,15 @@ static int test_report_large_file(void) {
   TEST_CASE("report_generate - Large file handling");
 
   struct uav_report report;
+  struct uav_scanner scanner;
   char tempfile[] = "/tmp/test_large_XXXXXX";
   int fd, ret;
 
   fd = mkstemp(tempfile);
   TEST_ASSERT(fd >= 0, "Should create temp file");
+
+  ret = uav_scanner_init(&scanner, 0, 0);
+  TEST_ASSERT_EQ(0, ret, "Should initialize empty scanner");
 
   /* Write 1MB of data in chunks */
   unsigned char chunk[4096];
@@ -366,12 +432,14 @@ static int test_report_large_file(void) {
   close(fd);
 
   /* Generate report */
-  ret = uav_report_generate(tempfile, &report);
+  ret = uav_report_generate(&scanner, tempfile, &report);
   TEST_ASSERT_EQ(0, ret, "Should handle large file");
   TEST_ASSERT_EQ(1024 * 1024, report.filesize, "Should report correct size");
   TEST_ASSERT(report.has_sha256, "Should compute hash for large file");
 
   unlink(tempfile);
+  uav_scanner_destroy(&scanner);
+  uav_report_destroy(&report);
   TEST_SUCCESS();
 }
 
@@ -380,6 +448,7 @@ static int test_report_executable_permission(void) {
   TEST_CASE("report_generate - Executable permission detection");
 
   struct uav_report report1, report2;
+  struct uav_scanner scanner;
   char tempfile[] = "/tmp/test_perm_XXXXXX";
   int fd, ret;
 
@@ -387,13 +456,16 @@ static int test_report_executable_permission(void) {
   TEST_ASSERT(fd >= 0, "Should create temp file");
   close(fd);
 
+  ret = uav_scanner_init(&scanner, 0, 0);
+  TEST_ASSERT_EQ(0, ret, "Should initialize empty scanner");
+
   const char *content = "test content";
 
   /* Test without executable bit */
   ret = create_test_file(tempfile, (const unsigned char *)content, strlen(content), 0644);
   TEST_ASSERT_EQ(0, ret, "Should write test file");
 
-  ret = uav_report_generate(tempfile, &report1);
+  ret = uav_report_generate(&scanner, tempfile, &report1);
   TEST_ASSERT_EQ(0, ret, "Should generate report");
 
   float suspicion_without_exec = report1.suspicion.index;
@@ -402,7 +474,7 @@ static int test_report_executable_permission(void) {
   ret = create_test_file(tempfile, (const unsigned char *)content, strlen(content), 0755);
   TEST_ASSERT_EQ(0, ret, "Should write test file");
 
-  ret = uav_report_generate(tempfile, &report2);
+  ret = uav_report_generate(&scanner, tempfile, &report2);
   TEST_ASSERT_EQ(0, ret, "Should generate report");
 
   float suspicion_with_exec = report2.suspicion.index;
@@ -411,6 +483,9 @@ static int test_report_executable_permission(void) {
   TEST_ASSERT(suspicion_with_exec > suspicion_without_exec, "Executable bit should increase suspicion");
 
   unlink(tempfile);
+  uav_scanner_destroy(&scanner);
+  uav_report_destroy(&report1);
+  uav_report_destroy(&report2);
   TEST_SUCCESS();
 }
 
@@ -419,6 +494,7 @@ static int test_report_print(void) {
   TEST_CASE("report_print - No crash test");
 
   struct uav_report report;
+  struct uav_scanner scanner;
   char tempfile[] = "/tmp/test_print_XXXXXX";
   int fd, ret;
 
@@ -426,11 +502,14 @@ static int test_report_print(void) {
   TEST_ASSERT(fd >= 0, "Should create temp file");
   close(fd);
 
+  ret = uav_scanner_init(&scanner, 0, 0);
+  TEST_ASSERT_EQ(0, ret, "Should initialize empty scanner");
+
   const char *content = "Test content for printing";
   ret = create_test_file(tempfile, (const unsigned char *)content, strlen(content), 0644);
   TEST_ASSERT_EQ(0, ret, "Should write test file");
 
-  ret = uav_report_generate(tempfile, &report);
+  ret = uav_report_generate(&scanner, tempfile, &report);
   TEST_ASSERT_EQ(0, ret, "Should generate report");
 
   /* Redirect stdout to /dev/null to suppress output during test */
@@ -449,6 +528,8 @@ static int test_report_print(void) {
   close(stdout_backup);
 
   unlink(tempfile);
+  uav_scanner_destroy(&scanner);
+  uav_report_destroy(&report);
   TEST_SUCCESS();
 }
 

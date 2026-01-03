@@ -18,9 +18,9 @@ struct match_context {
 };
 
 /* Add a matching to the ctx */
-static void uav_yara_matching_rule(const struct YRX_RULE *rule, void *user_data) {
+static void uav_yara_matching_rule(const struct YRX_RULE *rule, void *udata) {
   (void) rule;
-  struct match_context *ctx = user_data;
+  struct match_context *ctx = udata;
 
   if(ctx->count >= ctx->capacity) {
     ctx->capacity = ctx->capacity == 0 ? 8 : ctx->capacity * 2;
@@ -40,6 +40,7 @@ static void uav_yara_matching_rule(const struct YRX_RULE *rule, void *user_data)
 /* Initialize uav_scanner struct */
 // TODO: check configuration files signatures
 int uav_scanner_init(struct uav_scanner *s, const char *yr_path, const char *sig_path) {
+
   (void) sig_path;
 
   YRX_COMPILER *compiler = NULL;
@@ -47,6 +48,9 @@ int uav_scanner_init(struct uav_scanner *s, const char *yr_path, const char *sig
   char *rulesrc = NULL;
   size_t nread;
   int ret = 1;
+
+  /* Zero out everything */
+  memset(s, 0, sizeof(struct uav_scanner));
 
   if(!s) {
     errno = EINVAL;
@@ -92,7 +96,7 @@ cleanup:
 }
 
 /* Free resources */
-void uav_scanner_free(struct uav_scanner *s) {
+void uav_scanner_destroy(struct uav_scanner *s) {
   if(s == NULL) return;
 
   if(s->signatures) free(s->signatures);
@@ -102,16 +106,15 @@ void uav_scanner_free(struct uav_scanner *s) {
   s->rules = NULL;
 }
 
-int uav_yara_scan(const struct uav_scanner *s, const char *path, struct uav_yara_match **matches, size_t *nmatch) {
-
-  (void) matches;
+/* Scan a single file in synchronous mode. */
+int uav_scanner_scan_file_sync(const struct uav_scanner *s, const char *path, struct uav_yara_match **yrmatches, size_t *yrnmatch) {
 
   if(!s || !path) {
-    if(!nmatch) *nmatch = 0;
+    if(!yrnmatch) *yrnmatch = 0;
     return 0;
   }
 
-  if(!nmatch) return 1;
+  if(!yrnmatch) return 1;
 
   YRX_SCANNER *yara_scanner = NULL;
   enum YRX_RESULT result;
@@ -139,8 +142,8 @@ int uav_yara_scan(const struct uav_scanner *s, const char *path, struct uav_yara
     goto cleanup;
   }
 
-  *nmatch = ctx.count;
-  *matches = ctx.matches;
+  *yrnmatch = ctx.count;
+  *yrmatches = ctx.matches;
   ret = 0;
 
 cleanup:
