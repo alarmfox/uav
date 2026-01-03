@@ -1,5 +1,5 @@
 CFLAGS  = -Wall -Wextra -D_GNU_SOURCE -D_XOPEN_SOURCE=500 -Isrc/ -std=c11
-LDFLAGS = -lbpf -lcrypto -lzip -lpcap -lm -lyara_x_capi
+LDFLAGS = -lbpf -lcrypto -lzip -lpcap -lyara_x_capi
 BPFTOOL = bpftool
 EBPF_CFLAGS = -g -O2 -target bpf
 

@@ -1,8 +1,10 @@
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <fcntl.h>
+#include <sys/stat.h>
 
 #include <yara_x.h>
 
@@ -33,7 +35,9 @@ static void uav_yara_matching_rule(const struct YRX_RULE *rule, void *udata) {
   }
 
   struct uav_yara_match *match = &ctx->matches[ctx->count];
-  safe_strcpy(match->rule_name, "TODO", strlen("TODO") + 1);
+  /* Get matching rule identifier */
+  yrx_rule_identifier(rule, &match->identifier, &match->len);
+
   ctx->count += 1;
 }
 
@@ -47,10 +51,8 @@ int uav_scanner_init(struct uav_scanner *s, const char *yr_path, const char *sig
   YRX_RESULT result;
   char *rulesrc = NULL;
   size_t nread;
+  struct stat st;
   int ret = 1;
-
-  /* Zero out everything */
-  memset(s, 0, sizeof(struct uav_scanner));
 
   if(!s) {
     errno = EINVAL;
@@ -62,6 +64,9 @@ int uav_scanner_init(struct uav_scanner *s, const char *yr_path, const char *sig
     goto cleanup;
   }
 
+  /* Zero out everything */
+  memset(s, 0, sizeof(struct uav_scanner));
+
   /* Create a compiler */
   result = yrx_compiler_create(0, &compiler);
   if (result != YRX_SUCCESS) {
@@ -69,24 +74,77 @@ int uav_scanner_init(struct uav_scanner *s, const char *yr_path, const char *sig
     goto cleanup;
   }
 
-  /* TODO: import all .yar files from a directory */
-  /* Get rule source code */
-  rulesrc = read_file(yr_path, &nread);
-  if(!rulesrc) {
-    fprintf(stderr, "[YARA] Failed to read rules at %s: %s\n", yr_path, yrx_last_error());
+  ret = stat(yr_path, &st);
+  if(ret) {
+    ret = 1;
+    fprintf(stderr, "[YARA] cannot stat %s\n", yr_path);
     goto cleanup;
   }
 
-  /* Add rule to compiler*/
-  result = yrx_compiler_add_source(compiler, rulesrc);
-  if(result != YRX_SUCCESS) {
-    fprintf(stderr, "[YARA] Warning: Failed to add %s: %s\n", yr_path, yrx_last_error());
-    goto cleanup;
+  /* If a directory is passed, add all yara files to the compiler, otherwise add a single file */
+  if(S_ISDIR(st.st_mode)) {
+    DIR *dir = opendir(yr_path);
+    if(!dir) goto cleanup;
+    struct dirent *entry = NULL;
+
+    while((entry = readdir(dir)) != 0) {
+      size_t len = strlen(entry->d_name);
+      if(len < 4 || strcmp(entry->d_name + len - 4, ".yar") != 0) continue;
+
+      char filepath[PATH_MAX];
+      snprintf(filepath, sizeof(filepath), "%s/%s", yr_path, entry->d_name);
+
+      /* Get rule source code */
+      rulesrc = read_file(filepath, &nread);
+      if(!rulesrc) {
+        fprintf(stderr, "[YARA] Failed to read rules at %s: %s\n", yr_path, yrx_last_error());
+        goto cleanup;
+      }
+
+      /* Read rule source code */
+      result = yrx_compiler_add_source_with_origin(compiler, rulesrc, entry->d_name);
+      /* TODO: better error handling */
+      if(result != YRX_SUCCESS) {
+        free(rulesrc);
+        rulesrc = NULL;
+        fprintf(stderr, "[YARA] Warning: Failed to add %s: %s\n", yr_path, yrx_last_error());
+        goto cleanup;
+      }
+
+      free(rulesrc);
+      rulesrc = NULL;
+
+    }
+    closedir(dir);
+  } else {
+
+    /* Get rule source code */
+    rulesrc = read_file(yr_path, &nread);
+    if(!rulesrc) {
+      fprintf(stderr, "[YARA] Failed to read rules at %s: %s\n", yr_path, yrx_last_error());
+      goto cleanup;
+    }
+
+    /* Add rule to compiler*/
+    result = yrx_compiler_add_source_with_origin(compiler, rulesrc, yr_path);
+
+    /* TODO: better error handling */
+    if(result != YRX_SUCCESS) {
+      free(rulesrc);
+      rulesrc = NULL;
+      fprintf(stderr, "[YARA] Warning: Failed to add %s: %s\n", yr_path, yrx_last_error());
+      goto cleanup;
+    }
+    free(rulesrc);
+    rulesrc = NULL;
   }
 
   /* Build the rules */
   s->rules = yrx_compiler_build(compiler);
-
+  if (!s->rules) {
+    fprintf(stderr, "[YARA] Failed to build rules: %s\n", yrx_last_error());
+    goto cleanup;
+  }
   ret = 0;
 cleanup:
   if(compiler) yrx_compiler_destroy(compiler);

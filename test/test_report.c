@@ -29,8 +29,8 @@ static int create_test_file(const char *path, const unsigned char *content, size
 static int test_report_null_handling(void) {
   TEST_CASE("report_generate - NULL pointer handling");
 
-  struct uav_report report;
-  struct uav_scanner scanner;
+  struct uav_report report = {0};
+  struct uav_scanner scanner = {0};
   int ret;
 
   ret = uav_scanner_init(&scanner, 0, 0);
@@ -54,8 +54,8 @@ static int test_report_null_handling(void) {
 static int test_report_nonexistent_file(void) {
   TEST_CASE("report_generate - nonexistent file");
 
-  struct uav_report report;
-  struct uav_scanner scanner;
+  struct uav_report report = {0};
+  struct uav_scanner scanner = {0};
   int ret;
 
   ret = uav_scanner_init(&scanner, 0, 0);
@@ -76,8 +76,8 @@ static int test_report_nonexistent_file(void) {
 static int test_report_elf_file(void) {
   TEST_CASE("report_generate - ELF file detection");
 
-  struct uav_report report;
-  struct uav_scanner scanner;
+  struct uav_report report = {0};
+  struct uav_scanner scanner = {0};
   char tempfile[] = "/tmp/test_elf_XXXXXX";
   int fd, ret;
 
@@ -136,8 +136,8 @@ static int test_report_elf_file(void) {
 static int test_report_png_file(void) {
   TEST_CASE("report_generate - PNG file detection");
 
-  struct uav_report report;
-  struct uav_scanner scanner;
+  struct uav_report report = {0};
+  struct uav_scanner scanner = {0};
   char tempfile[] = "/tmp/test_png_XXXXXX";
   int fd, ret;
 
@@ -176,8 +176,8 @@ static int test_report_png_file(void) {
 static int test_report_pdf_file(void) {
   TEST_CASE("report_generate - PDF file detection");
 
-  struct uav_report report;
-  struct uav_scanner scanner;
+  struct uav_report report = {0};
+  struct uav_scanner scanner = {0};
   char tempfile[] = "/tmp/test_pdf_XXXXXX";
   int fd, ret;
  
@@ -209,8 +209,8 @@ static int test_report_pdf_file(void) {
 static int test_report_script_file(void) {
   TEST_CASE("report_generate - Script file detection");
 
-  struct uav_report report;
-  struct uav_scanner scanner;
+  struct uav_report report = {0};
+  struct uav_scanner scanner = {0};
   char tempfile[] = "/tmp/test_script_XXXXXX";
   int fd, ret;
 
@@ -244,8 +244,8 @@ static int test_report_script_file(void) {
 static int test_report_text_file(void) {
   TEST_CASE("report_generate - Text file detection");
 
-  struct uav_report report;
-  struct uav_scanner scanner;
+  struct uav_report report = {0};
+  struct uav_scanner scanner = {0};
   char tempfile[] = "/tmp/test_text_XXXXXX";
   int fd, ret;
 
@@ -277,8 +277,8 @@ static int test_report_text_file(void) {
 static int test_report_unknown_file(void) {
   TEST_CASE("report_generate - Unknown file type");
 
-  struct uav_report report;
-  struct uav_scanner scanner;
+  struct uav_report report = {0};
+  struct uav_scanner scanner = {0};
   char tempfile[] = "/tmp/test_unknown_XXXXXX";
   int fd, ret;
 
@@ -315,8 +315,8 @@ static int test_report_unknown_file(void) {
 static int test_report_hash_verification(void) {
   TEST_CASE("report_generate - Hash verification");
 
-  struct uav_report report;
-  struct uav_scanner scanner;
+  struct uav_report report = {0};
+  struct uav_scanner scanner = {0};
   char tempfile[] = "/tmp/test_hash_XXXXXX";
   int fd, ret;
 
@@ -371,8 +371,8 @@ static int test_report_hash_verification(void) {
 static int test_report_empty_file(void) {
   TEST_CASE("report_generate - Empty file");
 
-  struct uav_report report;
-  struct uav_scanner scanner;
+  struct uav_report report = {0};
+  struct uav_scanner scanner = {0};
   char tempfile[] = "/tmp/test_empty_XXXXXX";
   int fd, ret;
 
@@ -404,8 +404,8 @@ static int test_report_empty_file(void) {
 static int test_report_large_file(void) {
   TEST_CASE("report_generate - Large file handling");
 
-  struct uav_report report;
-  struct uav_scanner scanner;
+  struct uav_report report = {0};
+  struct uav_scanner scanner = {0};
   char tempfile[] = "/tmp/test_large_XXXXXX";
   int fd, ret;
 
@@ -447,8 +447,8 @@ static int test_report_large_file(void) {
 static int test_report_executable_permission(void) {
   TEST_CASE("report_generate - Executable permission detection");
 
-  struct uav_report report1, report2;
-  struct uav_scanner scanner;
+  struct uav_report report1= {0}, report2 = {0};
+  struct uav_scanner scanner = {0};
   char tempfile[] = "/tmp/test_perm_XXXXXX";
   int fd, ret;
 
@@ -475,7 +475,7 @@ static int test_report_executable_permission(void) {
   TEST_ASSERT_EQ(0, ret, "Should write test file");
 
   ret = uav_report_generate(&scanner, tempfile, &report2);
-  TEST_ASSERT_EQ(0, ret, "Should generate report");
+  TEST_ASSERT_EQ(0, ret, "Sheuld generate report");
 
   float suspicion_with_exec = report2.suspicion.index;
 
@@ -493,8 +493,8 @@ static int test_report_executable_permission(void) {
 static int test_report_print(void) {
   TEST_CASE("report_print - No crash test");
 
-  struct uav_report report;
-  struct uav_scanner scanner;
+  struct uav_report report = {0};
+  struct uav_scanner scanner = {0};
   char tempfile[] = "/tmp/test_print_XXXXXX";
   int fd, ret;
 

@@ -5,7 +5,8 @@
 #include <yara_x.h>
 
 struct uav_yara_match {
-    char rule_name[128];
+    const unsigned char *identifier;
+    size_t len;
 };
 
 struct uav_scanner {
