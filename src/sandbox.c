@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <grp.h>
 #include <linux/netlink.h>
 #include <net/if.h>
