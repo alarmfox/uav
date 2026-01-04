@@ -12,7 +12,7 @@ endif
 TARGET = uav
 
 # Source files
-SRCS = src/uav.c src/sandbox.c src/scanner.c src/utils.c src/netlink.c src/cgroup.c src/capture.c src/report.c
+SRCS = $(wildcard src/*.c)
 OBJS = $(SRCS:.c=.o)
 LIB_OBJS = $(filter-out src/uav.o, $(OBJS))
 
