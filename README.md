@@ -46,10 +46,13 @@ make
 This produces the `uav` binary.
 
 ### Scan a file
-To issue a simple file scan:
+Scan a file with a set of yara rules:
 ```sh
-sudo ./uav scan <suspicious-file>
+./uav scan --yara-rules <path-to-yara> <suspicious-file>
 ```
+
+The `--yara-rules` arg can point to a single `.yar` files or to a directory. If a directory is
+specified, only `.yar` file will be processed.
 
 ### Run a sandbox
 To run a program in a sandbox:
