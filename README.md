@@ -67,8 +67,8 @@ specified an interactive shell will be executed instead.
 ### Start the monitor
 To start the  monitor:
 
-> [!WARN]
-> Although one could run the monitor as sudo, it is advisible to run as root
+> [!WARNING]
+> Although one could run the monitor as sudo, it is advisible to run as root.
 
 ```sh
 ./uav monitor
