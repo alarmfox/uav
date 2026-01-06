@@ -21,9 +21,6 @@
 #include "sandbox.h"
 #include "utils.h"
 
-/* eBPF program */
-#include "sandbox.skel.h"
-
 /* Message types for parent-child communication */
 enum sandbox_msg_type {
   MSG_INVALID = 0,
@@ -129,7 +126,6 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   int ret = 1, wstatus, sockfd[2] = {-1, -1};
   pid_t child = -1;
   uid_t uid; gid_t gid;
-  unsigned int cgid;
   struct sandbox_entrypoint_args entrypoint_args = {0};
   struct sandbox_msg msg;
 
@@ -207,19 +203,6 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   ret = cgroup_set_limits("uav-cgroup", &s->limits);
   if (ret) goto cleanup;
 
-  /* Load sandbox bpf program */
-  s->skel = sandbox_bpf__open();
-  if (!s->skel) goto cleanup;
-
-  cgid = cgroup_getid("uav-cgroup");
-  s->skel->rodata->target_cgroup_id = cgid;
-
-  ret = sandbox_bpf__load(s->skel);
-  if (ret) goto cleanup;
-
-  ret = sandbox_bpf__attach(s->skel);
-  if (ret) goto cleanup;
-
   /* Start capture on host side interface */
   ret = pcap_start_capture(s);
   if (ret) goto cleanup;
@@ -236,7 +219,6 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
 
   pcap_stop_capture(s);
 cleanup:
-  if (s->skel) { sandbox_bpf__destroy(s->skel); s->skel = NULL; }
   if (sockfd[0] != -1) close(sockfd[0]);
   if (sockfd[1] != -1) close(sockfd[1]);
   if (ret != 0 && child > 0) kill(child, SIGKILL);

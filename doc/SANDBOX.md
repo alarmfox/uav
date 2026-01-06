@@ -1,6 +1,5 @@
 # Sandbox
 
-
 The sandbox is an isolated process with dedicated namespaces using [`clone(2)`](https://www.man7.org/linux/man-pages/man2/clone.2.html) 
 and [`pivot_root(2)`](https://www.man7.org/linux/man-pages/man2/pivot_root.2.html). Unshared namespaces are:
 - **Network namespace:** Isolated network stack, all traffic routed through host-side veth for inspection

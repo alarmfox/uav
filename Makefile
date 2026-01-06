@@ -1,31 +1,31 @@
-CFLAGS  = -Wall -Wextra -D_GNU_SOURCE -D_XOPEN_SOURCE=500 -Isrc/ -std=c11
-LDFLAGS = -lbpf -lcrypto -lzip -lpcap -lyara_x_capi
-BPFTOOL = bpftool
-EBPF_CFLAGS = -g -O2 -target bpf
+CFLAGS      = -Wall -Wextra -D_GNU_SOURCE -D_XOPEN_SOURCE=500 -Isrc/ -std=c11
+LDFLAGS     = -lbpf -lcrypto -lzip -lpcap -lyara_x_capi
+BPFTOOL     = bpftool
+EBPF_CFLAGS = -g -O2 -target bpf -Isrc -Wall
 
 ifeq ($(DEBUG),1)
-CFLAGS += -O0 -g
+CFLAGS     += -O0 -g
 else
-CFLAGS += -O2
+CFLAGS     += -O2
 endif
 
 TARGET = uav
 
 # Source files
-SRCS = $(wildcard src/*.c)
-OBJS = $(SRCS:.c=.o)
-LIB_OBJS = $(filter-out src/uav.o, $(OBJS))
+SRCS        = $(wildcard src/*.c)
+OBJS        = $(SRCS:.c=.o)
+LIB_OBJS    = $(filter-out src/uav.o, $(OBJS))
 
 # Tests
-TEST_SRCS := $(wildcard test/*.c)
-TEST_BINS = $(patsubst test/%.c,test/%,$(TEST_SRCS))
+TEST_SRCS  := $(wildcard test/*.c)
+TEST_BINS   = $(patsubst test/%.c,test/%,$(TEST_SRCS))
 
 # eBPF compilation
-EBPF_SRCS = bpf/sandbox.bpf.c
-EBPF_OBJS = $(EBPF_SRCS:.c=.o)
-EBPF_SKELETONS = src/sandbox.skel.h
+EBPF_SRCS   = $(wildcard bpf/*.bpf.c)
+EBPF_OBJS   = $(EBPF_SRCS:.c=.o)
+EBPF_SKELETONS = $(patsubst bpf/%.bpf.c,src/%.skel.h,$(EBPF_SRCS))
 
-all: $(EBPF_SKELETONS) $(TARGET)
+all: $(EBPF_SKELETONS) $(EBPF_OBJS) $(TARGET)
 
 $(TARGET): $(OBJS)
 	$(CC) -o $@ $^ $(LDFLAGS)

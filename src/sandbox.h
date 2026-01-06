@@ -56,8 +56,6 @@ struct uav_sandbox {
   unsigned int prefix;
   /* Limits to be applied to the sandbox */
   struct uav_cgroup_limits limits;
-  /* Reference to eBPF program */
-  struct sandbox_bpf *skel;
   /* Pointer to stack bottom: stack + limits.stack_size = stack_top */
   unsigned char *stack;
   /* Capture thread */

@@ -1,11 +1,13 @@
 #include <getopt.h>
 #include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "monitor.h"
 #include "report.h"
 #include "sandbox.h"
 #include "scanner.h"
@@ -32,7 +34,7 @@ static void print_scan_help(void) {
   printf("  uav scan document.pdf\n");
 }
 
-static void print_protect_help(void) {
+static void print_monitor_help(void) {
   printf("Usage: uav protect [options]\n\n");
   printf("Enable runtime malware protection.\n");
   printf("(Not yet implemented)\n");
@@ -159,9 +161,7 @@ static int cmd_sandbox(int argc, char **argv) {
 cleanup:
   uav_sandbox_destroy(&s);
 
-  if (extract_zip && rootfs_path) {
-    rmtree(rootfs_path);
-  }
+  if (extract_zip && rootfs_path) rmtree(rootfs_path);
 
   if(rootfs_path) free(rootfs_path);
   return ret;
@@ -235,11 +235,41 @@ cleanup:
   return ret;
 }
 
-static int cmd_protect(int argc, char **argv) {
-  (void)argc;
-  (void)argv;
-  fprintf(stderr, "Protection mode not yet implemented\n");
-  return 1;
+static volatile int g_running = 1;
+
+static void sighandler(int signum) {
+  (void) signum;
+  g_running = 0;
+}
+
+static int cmd_monitor(int argc, char **argv) {
+  (void) argc;
+  (void) argv;
+
+  int ret;
+  struct uav_monitor m;
+
+  signal(SIGINT, sighandler);
+
+  /* Initialize a new monitor */
+  ret = uav_monitor_init(&m);
+  if(ret) {
+    fprintf(stderr, "[MONITOR] cannot init: %s", strerror(errno));
+    goto cleanup;
+  }
+
+  /* Start the monitor */
+  ret = uav_monitor_start(&m);
+  if(ret) {
+    fprintf(stderr, "[MONITOR] cannot start: %s", strerror(errno));
+    goto cleanup;
+  }
+
+  while(g_running) pause();
+
+cleanup:
+  uav_monitor_destroy(&m);
+  return ret;
 }
 
 /* Command dispatch table */
@@ -253,7 +283,7 @@ struct command {
 static const struct command commands[] = {
   { "sandbox", cmd_sandbox, print_sandbox_help, "Run programs in isolated environment" },
   { "scan", cmd_scan, print_scan_help, "Scan files for malware signatures" },
-  { "protect", cmd_protect, print_protect_help, "Enable runtime protection" },
+  { "monitor", cmd_monitor, print_monitor_help, "Manage monitoring system" },
   { NULL, NULL, NULL, NULL }
 };
 

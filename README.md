@@ -12,7 +12,7 @@ to give some advanced tool to do some malware analysis to experienced users.
 ## Architecture
 
 `uav` is a single executable and has mainly 3 modes:
-- protection mode: always on -> inspect every program the user executes
+- protection mode: always on -> inspect every program
 - sandbox mode: support rootless isolated execution for malware analysis or sanity check of untrusted 
 programs
 - scan mode: scan a file providing a report with information like signature
@@ -37,6 +37,7 @@ More information in [doc/](./doc/).
 - OpenSSL libcrypto (for hash computation)
 - libzip (for archive extraction)
 - libpcap (sandbox traffic capture)
+- libyara-x-capi (parse yara rules and scan files)
 
 ## Building
 ```sh
@@ -62,6 +63,16 @@ sudo ./uav sandbox -r <path-to-rootfs> <suspicious-file>
 
 If the rootfs ends with `.zip`, `uav` will attempt to extract it. If `suspicious-file` is not
 specified an interactive shell will be executed instead.
+
+### Start the monitor
+To start the  monitor:
+
+> [!WARN]
+> Although one could run the monitor as sudo, it is advisible to run as root
+
+```sh
+./uav monitor
+```
 
 ## Running tests
 
