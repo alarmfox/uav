@@ -1,5 +1,5 @@
-#ifndef __UAV_NETLINK_K
-#define __UAV_NETLINK_K
+#ifndef __UAV_NETLINK_H
+#define __UAV_NETLINK_H
 
 #include <netinet/in.h>
 
@@ -10,4 +10,4 @@ int add_ip_addr(int nlsock, const char *ifname, const struct in_addr *addr, int 
 int move_if_to_netns(int nlsock, const char *ifname, int netns_fd);
 int add_default_route(int nlsock, const struct in_addr *gw, const char *ifname);
 
-#endif // !__UAV_NETLINK_K
+#endif // !__UAV_NETLINK_H

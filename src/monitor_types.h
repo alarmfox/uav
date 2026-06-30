@@ -2,8 +2,8 @@
 #define __UAV_MONITOR_UAV
 
 #ifndef __BPF__
-    /* Userspace needs linux types */
-    #include <linux/types.h>
+/* Userspace needs linux types */
+#include <linux/types.h>
 #endif
 /* eBPF gets types from vmlinux.h automatically */
 

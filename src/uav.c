@@ -13,9 +13,9 @@
 #include "scanner.h"
 #include "utils.h"
 
-/* Command help */
-static void print_scan_help(void) {
-  printf("Usage: uav scan [options] <file>\n\n");
+/* Command scan */
+static void print_scanner_help(void) {
+  printf("Usage: uav scanner [options] <file>\n\n");
   printf("Scan a file for malware indicators and generate a detailed report.\n\n");
   printf("Options:\n");
   printf("  -r, --yara-rules    Yara rules to load. This can be either a single file or a directory\n");
@@ -34,18 +34,138 @@ static void print_scan_help(void) {
   printf("  uav scan document.pdf\n");
 }
 
+/* Scan function */
+static int cmd_scan(int argc, char **argv) {
+  int opt;
+  int ret = 1;
+  const char *filepath = NULL, *yr_rules = NULL;
+  struct uav_report report = {0};
+  struct uav_scanner scanner = {0};
+
+  static const struct option long_options[] = {
+    { "help", no_argument, NULL, 'h' },
+    { "yara-rules", required_argument, NULL, 'y' },
+    { NULL, 0, NULL, 0 }
+  };
+
+  while ((opt = getopt_long(argc, argv, "y:h", long_options, NULL)) != -1) {
+    switch (opt) {
+      case 'h':
+        print_scanner_help();
+        return 0;
+      case 'y':
+        yr_rules = optarg;
+        break;
+      default:
+        print_scanner_help();
+        return 1;
+    }
+  }
+
+  /* Require exactly one file argument */
+  if (optind >= argc) {
+    fprintf(stderr, "Error: No file specified\n\n");
+    print_scanner_help();
+    return 1;
+  }
+
+  if (optind + 1 < argc) {
+    fprintf(stderr, "Error: Too many arguments (only one file at a time)\n\n");
+    print_scanner_help();
+    return 1;
+  }
+
+  filepath = argv[optind];
+
+  /* Initialize scanner */
+  ret = uav_scanner_init(&scanner, yr_rules, NULL);
+  if(ret != 0) {
+    fprintf(stderr, "[ERROR] cannot initialize scanner: %s\n", strerror(errno));
+    goto cleanup;
+  }
+
+  /* Generate malware report */
+  ret = uav_report_generate(&scanner, filepath, &report);
+  if (ret != 0) {
+    /* Report structure contains error details */
+    uav_report_print(&report);
+    goto cleanup;
+  }
+
+  /* Print the report */
+  uav_report_print(&report);
+  ret = 0;
+
+cleanup:
+  uav_scanner_destroy(&scanner);
+  uav_report_destroy(&report);
+  return ret;
+}
+
+/* Command monitor */
 static void print_monitor_help(void) {
   printf("Usage: uav protect [options]\n\n");
   printf("Enable runtime malware protection.\n");
   printf("(Not yet implemented)\n");
 }
 
+static volatile int g_running = 1;
+
+static void sighandler(int signum) {
+  (void) signum;
+  g_running = 0;
+}
+
+static int cmd_monitor_start(int argc, char **argv) {
+
+}
+
+static int cmd_monitor(int argc, char **argv) {
+  (void) argc;
+  (void) argv;
+
+  int ret;
+  struct uav_monitor m;
+
+  signal(SIGINT, sighandler);
+
+  /* Initialize a new monitor */
+  ret = uav_monitor_init(&m);
+  if(ret) {
+    fprintf(stderr, "[MONITOR] cannot init: %s", strerror(errno));
+    goto cleanup;
+  }
+
+  /* Start the monitor */
+  ret = uav_monitor_start(&m);
+  if(ret) {
+    fprintf(stderr, "[MONITOR] cannot start: %s", strerror(errno));
+    goto cleanup;
+  }
+
+  while(g_running) pause();
+
+cleanup:
+  uav_monitor_destroy(&m);
+  return ret;
+}
+
+/* Command sandbox */
 static void print_sandbox_help(void) {
-  printf("Usage: uav sandbox [options] [program]\n\n");
+  printf("Usage: uav sandbox [command]\n\n");
+  printf("Manage sandbox\n\n");
+  printf("Available commands:\n");
+  printf("  run,                Run a new sandbox.\n");
+  printf("  -h, --help          Show this help message\n\n");
+  printf("Examples:\n");
+  printf("  uav sandbox run suspicious.sh\n");
+}
+
+static void print_sandbox_run_help(void) {
+  printf("Usage: uav sandbox run [options] <program> \n\n");
   printf("Run a program in an isolated sandbox environment.\n\n");
   printf("Options:\n");
   printf("  -r, --rootfs PATH   Path to rootfs directory or .zip file\n");
-  printf("                      (default: sandbox/)\n");
   printf("  -h, --help          Show this help message\n\n");
   printf("Arguments:\n");
   printf("  program             Program to execute in sandbox\n");
@@ -56,8 +176,7 @@ static void print_sandbox_help(void) {
   printf("  uav sandbox --rootfs /custom/rootfs\n");
 }
 
-/* Command functions */
-static int cmd_sandbox(int argc, char **argv) {
+static int cmd_sandbox_run(int argc, char **argv) {
   int ret = 1;
   int opt;
   int extract_zip = 0;
@@ -67,6 +186,11 @@ static int cmd_sandbox(int argc, char **argv) {
   const char *program = NULL;
 
   struct uav_sandbox s = {0};
+
+  if(argc < 2) {
+    print_sandbox_run_help();
+    return 0;
+  }
 
   static const struct option long_options[] = {
     { "rootfs", required_argument, NULL, 'r' },
@@ -82,10 +206,10 @@ static int cmd_sandbox(int argc, char **argv) {
         extract_zip = (len > 4 && strcmp(rootfs_arg + len - 4, ".zip") == 0);
         break;
       case 'h':
-        print_sandbox_help();
+        print_sandbox_run_help();
         return 0;
       default:
-        print_sandbox_help();
+        print_sandbox_run_help();
         return 1;
     }
   }
@@ -167,109 +291,19 @@ cleanup:
   return ret;
 }
 
-/* Scan function */
-static int cmd_scan(int argc, char **argv) {
-  int opt;
-  int ret = 1;
-  const char *filepath = NULL, *yr_rules = NULL;
-  struct uav_report report = {0};
-  struct uav_scanner scanner = { 0 };
+/* Command functions */
+static int cmd_sandbox(int argc, char **argv) {
 
-  static const struct option long_options[] = {
-    { "help", no_argument, NULL, 'h' },
-    { "yara-rules", required_argument, NULL, 'y' },
-    { NULL, 0, NULL, 0 }
-  };
-
-  while ((opt = getopt_long(argc, argv, "y:h", long_options, NULL)) != -1) {
-    switch (opt) {
-      case 'h':
-        print_scan_help();
-        return 0;
-      case 'y':
-        yr_rules = optarg;
-        break;
-      default:
-        print_scan_help();
-        return 1;
-    }
+  if(argc < 2) {
+    print_sandbox_help();
+    return 0;
   }
 
-  /* Require exactly one file argument */
-  if (optind >= argc) {
-    fprintf(stderr, "Error: No file specified\n\n");
-    print_scan_help();
-    return 1;
-  }
+  if(strcmp("run", argv[1]) == 0) return cmd_sandbox_run(argc - 1, argv + 1);
+ 
+  print_sandbox_help();
 
-  if (optind + 1 < argc) {
-    fprintf(stderr, "Error: Too many arguments (only one file at a time)\n\n");
-    print_scan_help();
-    return 1;
-  }
-
-  filepath = argv[optind];
-
-  /* Initialize scanner */
-  ret = uav_scanner_init(&scanner, yr_rules, NULL);
-  if(ret != 0) {
-    fprintf(stderr, "[ERROR] cannot initialize scanner: %s\n", strerror(errno));
-    goto cleanup;
-  }
-
-  /* Generate malware report */
-  ret = uav_report_generate(&scanner, filepath, &report);
-  if (ret != 0) {
-    /* Report structure contains error details */
-    uav_report_print(&report);
-    goto cleanup;
-  }
-
-  /* Print the report */
-  uav_report_print(&report);
-  ret = 0;
-
-cleanup:
-  uav_scanner_destroy(&scanner);
-  uav_report_destroy(&report);
-  return ret;
-}
-
-static volatile int g_running = 1;
-
-static void sighandler(int signum) {
-  (void) signum;
-  g_running = 0;
-}
-
-static int cmd_monitor(int argc, char **argv) {
-  (void) argc;
-  (void) argv;
-
-  int ret;
-  struct uav_monitor m;
-
-  signal(SIGINT, sighandler);
-
-  /* Initialize a new monitor */
-  ret = uav_monitor_init(&m);
-  if(ret) {
-    fprintf(stderr, "[MONITOR] cannot init: %s", strerror(errno));
-    goto cleanup;
-  }
-
-  /* Start the monitor */
-  ret = uav_monitor_start(&m);
-  if(ret) {
-    fprintf(stderr, "[MONITOR] cannot start: %s", strerror(errno));
-    goto cleanup;
-  }
-
-  while(g_running) pause();
-
-cleanup:
-  uav_monitor_destroy(&m);
-  return ret;
+  return 1;
 }
 
 /* Command dispatch table */
@@ -282,7 +316,7 @@ struct command {
 
 static const struct command commands[] = {
   { "sandbox", cmd_sandbox, print_sandbox_help, "Run programs in isolated environment" },
-  { "scan", cmd_scan, print_scan_help, "Scan files for malware signatures" },
+  { "scan", cmd_scan, print_scanner_help, "Scan files for malware signatures" },
   { "monitor", cmd_monitor, print_monitor_help, "Manage monitoring system" },
   { NULL, NULL, NULL, NULL }
 };
