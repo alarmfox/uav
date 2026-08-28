@@ -33,7 +33,7 @@ static int enable_controllers(const char *parent_cgroup, const char *controllers
   return 0;
 }
 
-/* Create a new cgroup in /sys/fs/cgroup (assume we have cgroup v2). This functions does not return 
+/* Create a new cgroup in /sys/fs/cgroup (assume we have cgroup v2). This functions does not return
  * an error if the cgroup alreay exists */
 int cgroup_create(const char *cgname) {
   char path[256];

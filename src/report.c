@@ -85,7 +85,7 @@ static int compute_all_hashes(FILE *file, struct uav_report *report) {
   if (EVP_DigestInit_ex(md5_ctx, EVP_md5(), NULL) != 1 ||
       EVP_DigestInit_ex(sha1_ctx, EVP_sha1(), NULL) != 1 ||
       EVP_DigestInit_ex(sha256_ctx, EVP_sha256(), NULL) != 1) {
-    snprintf(report->error_msg, sizeof(report->error_msg), 
+    snprintf(report->error_msg, sizeof(report->error_msg),
         "Failed to initialize hash contexts");
     goto cleanup;
   }

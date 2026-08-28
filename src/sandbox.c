@@ -212,7 +212,7 @@ int uav_sandbox_run_program(struct uav_sandbox *s, const char *program) {
   if (ret < 0) goto cleanup;
 
   /* Wait for confirmation or exit */
-  recv_msg(sockfd[0], &msg); 
+  recv_msg(sockfd[0], &msg);
 
   waitpid(child, &wstatus, 0);
   ret = (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) == 0) ? 0 : 1;
@@ -406,7 +406,7 @@ static int sandbox_entrypoint(void *args_) {
     "TERM=xterm",
     "HOME=/root",
     "PS1=(\\u@\\h):\\w>",
-    NULL 
+    NULL
   };
   execve("/bin/sh", argv, envp);
 
