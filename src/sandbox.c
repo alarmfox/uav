@@ -43,8 +43,8 @@ static int uav_sandbox_become_root(void);
 static int uav_sandbox_setup_overlay(const struct uav_sandbox *s);
 static int uav_sandbox_prepare_runtime(const struct uav_sandbox *s);
 static int uav_sandbox_pivot_root(const struct uav_sandbox *s);
-static int uav_sandbox_exec_entrypoint(const char *program);
 static int uav_sandbox_copyfile(const struct uav_sandbox *s, const char *src, const char *dst);
+static int uav_sandbox_exec_entrypoint(const char *program);
 static int sandbox_entrypoint(void *ptr);
 
 int uav_sandbox_create(struct uav_sandbox *s) {
@@ -511,27 +511,6 @@ out:
   return ret;
 }
 
-static int uav_sandbox_exec_entrypoint(const char *program) {
-
-  char *const envp[] = {
-    "PATH=/bin:/sbin:/usr/bin:/usr/sbin",
-    "TERM=xterm",
-    "HOME=/root",
-    "PS1=(@\\h):\\w>",
-    NULL
-  };
-
-  char *const argv[] = {
-    "/entrypoint",
-    (char*)program,
-    NULL
-  };
-
-  execve("/entrypoint", argv, envp);
-
-  return -1;
-}
-
 static int uav_sandbox_copyfile(const struct uav_sandbox *s, const char *src, const char *dst) {
 
   int ret = -1;
@@ -556,6 +535,27 @@ out:
 
   return ret;
 
+}
+
+static int uav_sandbox_exec_entrypoint(const char *program) {
+
+  char *const envp[] = {
+    "PATH=/bin:/sbin:/usr/bin:/usr/sbin",
+    "TERM=xterm",
+    "HOME=/root",
+    "PS1=(@\\h):\\w>",
+    NULL
+  };
+
+  char *const argv[] = {
+    "/entrypoint",
+    (char*)program,
+    NULL
+  };
+
+  execve("/entrypoint", argv, envp);
+
+  return -1;
 }
 
 static int sandbox_entrypoint(void *ptr) {
