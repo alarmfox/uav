@@ -13,70 +13,69 @@
 #include "sandbox.h"
 #include "utils.h"
 
-static int uav_extract_initramfs(const char *archive_path, const char *base)
-{
-    struct archive *a = NULL;
-    struct archive *ext = NULL;
-    struct archive_entry *entry;
-    int ret = 1;
+static int uav_extract_initramfs(const char *archive_path, const char *base) {
+  struct archive *a = NULL;
+  struct archive *ext = NULL;
+  struct archive_entry *entry;
+  int ret = 1;
 
-    a = archive_read_new();
-    if (!a)
-        return 1;
+  a = archive_read_new();
+  if (!a)
+    return 1;
 
-    archive_read_support_filter_gzip(a);
-    archive_read_support_format_cpio(a);
+  archive_read_support_filter_gzip(a);
+  archive_read_support_format_cpio(a);
 
-    if (archive_read_open_filename(a, archive_path, 10240) != ARCHIVE_OK) {
-        fprintf(stderr, "[UAV] cannot open %s: %s\n",archive_path, archive_error_string(a));
-        goto out;
+  if (archive_read_open_filename(a, archive_path, 10240) != ARCHIVE_OK) {
+    fprintf(stderr, "[UAV] cannot open %s: %s\n",archive_path, archive_error_string(a));
+    goto out;
+  }
+
+  ext = archive_write_disk_new();
+  if (!ext)
+    goto out;
+
+  archive_write_disk_set_options(
+      ext,
+      ARCHIVE_EXTRACT_TIME |
+      ARCHIVE_EXTRACT_PERM |
+      ARCHIVE_EXTRACT_ACL |
+      ARCHIVE_EXTRACT_FFLAGS
+      );
+
+  while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
+    const char *name = archive_entry_pathname(entry);
+
+    char path[PATH_MAX];
+
+    if (snprintf(path, sizeof(path), "%s/%s", base, name)
+        >= (int)sizeof(path)) {
+      fprintf(stderr, "[UAV] extracted path too long: %s\n", name);
+      goto out;
     }
 
-    ext = archive_write_disk_new();
-    if (!ext)
-        goto out;
+    archive_entry_set_pathname(entry, path);
 
-    archive_write_disk_set_options(
-        ext,
-        ARCHIVE_EXTRACT_TIME |
-        ARCHIVE_EXTRACT_PERM |
-        ARCHIVE_EXTRACT_ACL |
-        ARCHIVE_EXTRACT_FFLAGS
-    );
-
-    while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
-        const char *name = archive_entry_pathname(entry);
-
-        char path[PATH_MAX];
-
-        if (snprintf(path, sizeof(path), "%s/%s", base, name)
-            >= (int)sizeof(path)) {
-            fprintf(stderr, "[UAV] extracted path too long: %s\n", name);
-            goto out;
-        }
-
-        archive_entry_set_pathname(entry, path);
-
-        int r = archive_read_extract2(a, entry, ext);
-        if (r != ARCHIVE_OK) {
-            fprintf(stderr, "[UAV] extract %s failed: %s\n",
-                    path, archive_error_string(a));
-            goto out;
-        }
+    int r = archive_read_extract2(a, entry, ext);
+    if (r != ARCHIVE_OK) {
+      fprintf(stderr, "[UAV] extract %s failed: %s\n",
+          path, archive_error_string(a));
+      goto out;
     }
+  }
 
-    ret = 0;
+  ret = 0;
 
 out:
-    if (ext)
-        archive_write_free(ext);
+  if (ext)
+    archive_write_free(ext);
 
-    if (a) {
-        archive_read_close(a);
-        archive_read_free(a);
-    }
+  if (a) {
+    archive_read_close(a);
+    archive_read_free(a);
+  }
 
-    return ret;
+  return ret;
 }
 
 int uav_sandbox_create(struct uav_sandbox *s) {
