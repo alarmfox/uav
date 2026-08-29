@@ -2,10 +2,12 @@
 #define UAV_UTILS_H
 
 #include <errno.h>
+#include <fcntl.h>
 #include <ftw.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <linux/limits.h>
 
@@ -72,6 +74,109 @@ static char *uav_path_join(const char *p1, const char *p2) {
 
   r[pos] = '\0';
   return r;
+}
+
+static int write_file(const char *path, const char *data, size_t len) {
+  int fd, ret = -1;
+  ssize_t written;
+
+  fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) {
+    fprintf(stderr, "[UTILS] cannot open %s: %s\n", path, strerror(errno));
+    return -1;
+  }
+
+  written = write(fd, data, len);
+  if (written < 0 || (size_t)written != len) {
+    fprintf(stderr, "[UTILS] write failed: %s\n", strerror(errno));
+    goto cleanup;
+  }
+
+  ret = 0;
+
+cleanup:
+  close(fd);
+  return ret;
+}
+
+int write_file_str(const char *path, const char *str) {
+  return write_file(path, str, strlen(str));
+}
+
+static inline int mkdir_if_missing(const char *path, mode_t mode) {
+    if (mkdir(path, mode) == 0)
+        return 0;
+
+    if (errno == EEXIST)
+        return 0;
+
+    return -1;
+}
+
+static int copyfile(const char *src, const char *dst) {
+  int srcfd = -1, dstfd = -1;
+  unsigned char buf[8192];
+  int ret = -1;
+
+  srcfd = open(src, O_RDONLY);
+  if (srcfd < 0) {
+    fprintf(stderr, "[UAV] cannot open source %s: %s\n",
+            src, strerror(errno));
+    goto cleanup;
+  }
+
+  dstfd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (dstfd < 0) {
+    fprintf(stderr, "[UAV] cannot open destination %s: %s\n",
+            dst, strerror(errno));
+    goto cleanup;
+  }
+
+  for (;;) {
+    ssize_t nread;
+
+    do {
+      nread = read(srcfd, buf, sizeof(buf));
+    } while (nread < 0 && errno == EINTR);
+
+    if (nread < 0) {
+      fprintf(stderr, "[UAV] read error: %s\n", strerror(errno));
+      goto cleanup;
+    }
+
+    if (nread == 0)
+      break;
+
+    ssize_t written = 0;
+
+    while (written < nread) {
+      ssize_t nwrite;
+
+      do {
+        nwrite = write(dstfd,
+                       buf + written,
+                       (size_t)(nread - written));
+      } while (nwrite < 0 && errno == EINTR);
+
+      if (nwrite < 0) {
+        fprintf(stderr, "[UAV] write error: %s\n", strerror(errno));
+        goto cleanup;
+      }
+
+      written += nwrite;
+    }
+  }
+
+  ret = 0;
+
+cleanup:
+  if (srcfd >= 0)
+    close(srcfd);
+
+  if (dstfd >= 0)
+    close(dstfd);
+
+  return ret;
 }
 
 #endif // !UAV_UTILS_H

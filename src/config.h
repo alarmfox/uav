@@ -9,7 +9,9 @@
 
 _Static_assert(sizeof(UAV_SANDBOX_DIR) + sizeof("/uav_sandbox_XXXXXX") < PATH_MAX, "UAV_SANDBOX_DIR is too big");
 
-#define UAV_SANDBOX_STACK_SIZE (1024 * 8)
+#define UAV_SANDBOX_STACK_SIZE (1024 * 1024)
+
+_Static_assert(UAV_SANDBOX_STACK_SIZE % 16 == 0, "sandbox stack size must preserve 16-byte alignment");
 
 #define UAV_SANDBOX_INITRAMFS_PATH "/tmp/initramfs.cpio.gz"
 

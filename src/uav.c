@@ -20,7 +20,7 @@ static void print_sandbox_run_help(void) {
 
 static int cmd_sandbox_run(int argc, const char *argv[]) {
 
-  int ret;
+  int ret = -1;
 
   if(argc < 2) {
     print_sandbox_run_help();
@@ -37,13 +37,15 @@ static int cmd_sandbox_run(int argc, const char *argv[]) {
 
   printf("[UAV] created sandbox in %s\n", s.path);
 
-  ret = uav_sandbox_run_program(0, argv[1]);
+  ret = uav_sandbox_run_program(&s, argv[1]);
   if (ret != 0) {
     fprintf(stderr, "[UAV] cannot run sandbox\n");
-    return ret;
+    goto cleanup;
   }
 
+cleanup:
   uav_sandbox_destroy(&s);
+  printf("[UAV] destroyed sandbox in %s\n", s.path);
   return 0;
 }
 
