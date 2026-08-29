@@ -1,7 +1,8 @@
 # Sandbox
 
-The sandbox is an isolated process with dedicated namespaces using [`clone(2)`](https://www.man7.org/linux/man-pages/man2/clone.2.html) 
-and [`pivot_root(2)`](https://www.man7.org/linux/man-pages/man2/pivot_root.2.html). Unshared namespaces are:
+The sandbox is an isolated process with dedicated namespaces using [`clone(2)`](https://www.man7.org/linux/man-pages/man2/clone.2.html) and [`pivot_root(2)`](https://www.man7.org/linux/man-pages/man2/pivot_root.2.html).
+
+Unshared namespaces are:
 - **Network namespace:** Isolated network stack, all traffic routed through host-side veth for inspection
 - **PID namespace:** Process appears as PID 1 inside sandbox
 - **UTS namespace:** Isolated hostname
@@ -16,10 +17,9 @@ Default limitations are:
 - Memory: 128Mb
 - Pids: 20
 
-The process uses the real user uid and gid to map the root user to achieve rootless. By default, the sandbox is 
-created upon a minimal busybox environment, but you can make the "rootfs" be whatever you want.
+The process uses the real user uid and gid to map the root user to achieve rootless. By default, the sandbox is created upon a minimal busybox environment, but you can make the "rootfs" be whatever you want.
 
-Each sandbox execution uses temporary OverlayFS mount to create an ephemeral COW upper layer without 
+Each sandbox execution uses temporary OverlayFS mount to create an ephemeral COW upper layer without
 changing the base layer.
 
 ## Setting up a sandbox
@@ -55,7 +55,7 @@ All traffic routed from the veth pair will be captured in a pcap file and made a
 By default the sandbox has not access to the Internet.
 
 > [!INFO]
-> I am currently working an eBPF NAT system which allows to provide high performance Traffic Control 
+> I am currently working an eBPF NAT system which allows to provide high performance Traffic Control
 without any extra action.
 
 A simple way to get internet access is by NAT using iptables. This is not the most elegant way but

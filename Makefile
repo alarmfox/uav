@@ -1,7 +1,6 @@
-CFLAGS         = -Wall -Wextra -D_GNU_SOURCE -D_XOPEN_SOURCE=500 -Isrc/ -std=c11
-LDFLAGS        = -lbpf -lcrypto -lzip -lpcap -lyara_x_capi
-BPFTOOL        = bpftool
-EBPF_CFLAGS    = -g -O2 -target bpf -Isrc -Wall
+CPPFLAGS       = -Isrc/ -D_XOPEN_SOURCE=500 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
+CFLAGS         = -Wall -Wextra -std=c11
+LDFLAGS        = -larchive
 
 ifeq ($(DEBUG),1)
 CFLAGS        += -O0 -g
@@ -9,62 +8,21 @@ else
 CFLAGS        += -O2
 endif
 
+ifeq ($(RELEASE),1)
+CFLAGS      += -Werror
+endif
+
 TARGET         = uav
+SRCS           = src/uav.c src/sandbox.c
+OBJS           = src/uav.o src/sandbox.o
 
-# Source files
-SRCS           = $(wildcard src/*.c)
-OBJS           = $(SRCS:.c=.o)
-LIB_OBJS       = $(filter-out src/uav.o, $(OBJS))
-
-# Tests
-TEST_SRCS     := $(wildcard test/*.c)
-TEST_BINS      = $(patsubst test/%.c,test/%,$(TEST_SRCS))
-
-# eBPF compilation
-EBPF_SRCS      = $(wildcard bpf/*.bpf.c)
-EBPF_OBJS      = $(EBPF_SRCS:.c=.o)
-EBPF_SKELETONS = $(patsubst bpf/%.bpf.c,src/%.skel.h,$(EBPF_SRCS))
-
-all: $(EBPF_SKELETONS) $(TARGET)
+all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(CC) -o $@ $^ $(LDFLAGS)
-
-test/%: test/%.o $(EBPF_SKELETONS) $(LIB_OBJS)
-	$(CC) $(CFLAGS) -o $@ $< $(LIB_OBJS) $(LDFLAGS)
-
-.PHONY: test
-test: $(TEST_BINS)
-	@for t in $(TEST_BINS); do \
-		echo "Running $$t..."; \
-		./$$t || exit 1; \
-	done
-
-valgrind: $(TEST_BINS)
-	@for t in $(TEST_BINS); do \
-		echo "Running $$t with Valgrind..."; \
-		valgrind --tool=memcheck \
-		--leak-check=full \
-		--show-leak-kinds=all \
-		--track-origins=yes \
-		--error-exitcode=1 \
-		--quiet \
-		./$$t || exit 1; \
-	done
-
-src/%.skel.h: bpf/%.bpf.o
-	$(BPFTOOL) gen skeleton $< > $@
-
-bpf/%.bpf.o: bpf/%.bpf.c bpf/vmlinux.h
-	clang $(EBPF_CFLAGS) -c $< -o $@
+	$(CC) $(LDFLAGS) -o $@ $?
 
 %.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-bpf/vmlinux.h:
-	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(OBJS) $(TARGET) $(EBPF_SKELETONS) $(TEST_BINS)
-
-.PHONY: all clean
+	$(RM) $(TARGET) $(OBJS)

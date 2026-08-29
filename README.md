@@ -1,28 +1,23 @@
-# UAV: Uncomplicated AntiVirus program for Linux
+# UAV: Uncomplicated AntiVirus for Linux
 
 > [!WARNING]
 > `uav` is an early development project.
 
-A lightweight antivirus for Linux systems with rootless sandbox capabilities.
+A lightweight antivirus for Linux systems.
 
 ## Scope
-The idea is to create a simple and reliable malware detection program suitable for normal users and 
+The idea is to create a simple and reliable malware detection program suitable for normal users and
 to give some advanced tool to do some malware analysis to experienced users.
+
+The goal is to have a program that has:
+
+- protection-mode: look for specific patterns;
+- scan-mode: scan files or directories for signature based analysis;
+- sandbox-mode: dynamic analysis in a sandbox;
 
 ## Architecture
 
-`uav` is a single executable and has mainly 3 modes:
-- protection mode: always on -> inspect every program
-- sandbox mode: support rootless isolated execution for malware analysis or sanity check of untrusted 
-programs
-- scan mode: scan a file providing a report with information like signature
-
-More information in [doc/](./doc/).
-
-**eBPF Integration:**
-- LSM (Linux Security Module) hooks for mandatory access control
-- Hooks on file operations, process creation, network access
-- Per-cgroup policy attachment
+TODO
 
 ## Dependencies
 
@@ -32,59 +27,7 @@ More information in [doc/](./doc/).
 - OverlayFS support
 - Capabilities: `CAP_SYS_ADMIN`, `CAP_NET_ADMIN`, `CAP_SYS_CHROOT`
 
-**Build:**
-- libbpf (for eBPF program loading)
-- OpenSSL libcrypto (for hash computation)
-- libzip (for archive extraction)
-- libpcap (sandbox traffic capture)
-- libyara-x-capi (parse yara rules and scan files)
-
 ## Building
 ```sh
 make
-```
-
-This produces the `uav` binary.
-
-### Scan a file
-Scan a file with a set of yara rules:
-```sh
-./uav scan --yara-rules <path-to-yara> <suspicious-file>
-```
-
-The `--yara-rules` arg can point to a single `.yar` files or to a directory. If a directory is
-specified, only `.yar` file will be processed.
-
-### Run a sandbox
-To run a program in a sandbox:
-```sh
-sudo ./uav sandbox -r <path-to-rootfs> <suspicious-file>
-```
-
-If the rootfs ends with `.zip`, `uav` will attempt to extract it. If `suspicious-file` is not
-specified an interactive shell will be executed instead.
-
-### Start the monitor
-To start the  monitor:
-
-> [!WARNING]
-> Although one could run the monitor as sudo, it is advisible to run as root.
-
-```sh
-./uav monitor
-```
-
-## Running tests
-
-> [!NOTE]
-> Some tests (the one regarding the sandbox) need to be executed with root privileges (i.e sudo).
-
-User can run test with:
-```sh
-make test
-```
-
-If they have Valgrind, the test can be run with:
-```sh
-make valgrind
 ```

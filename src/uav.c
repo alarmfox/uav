@@ -1,172 +1,15 @@
 #include <getopt.h>
-#include <errno.h>
-#include <signal.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
-#include "monitor.h"
-#include "report.h"
+#include "config.h"
 #include "sandbox.h"
-#include "scanner.h"
-#include "utils.h"
 
-/* Command scan */
-static void print_scanner_help(void) {
-  printf("Usage: uav scanner [options] <file>\n\n");
-  printf("Scan a file for malware indicators and generate a detailed report.\n\n");
-  printf("Options:\n");
-  printf("  -r, --yara-rules    Yara rules to load. This can be either a single file or a directory\n");
-  printf("                      (If directory all .yar file will be loaded)\n");
-  printf("  -h, --help          Show this help message\n\n");
-  printf("Arguments:\n");
-  printf("  file                File to scan and analyze\n\n");
-  printf("Report includes:\n");
-  printf("  - Cryptographic hashes (MD5, SHA-1, SHA-256)\n");
-  printf("  - File type detection from magic bytes\n");
-  printf("  - Suspicion index (0.0 = clean, 1.0 = highly suspicious)\n");
-  printf("  - Signature matching against known malware database\n\n");
-  printf("Examples:\n");
-  printf("  uav scan --yara-rules rules.yar suspicious.sh\n");
-  printf("  uav scan /tmp/unknown_binary\n");
-  printf("  uav scan document.pdf\n");
-}
-
-/* Scan function */
-static int cmd_scan(int argc, char **argv) {
-  int opt;
-  int ret = 1;
-  const char *filepath = NULL, *yr_rules = NULL;
-  struct uav_report report = {0};
-  struct uav_scanner scanner = {0};
-
-  static const struct option long_options[] = {
-    { "help", no_argument, NULL, 'h' },
-    { "yara-rules", required_argument, NULL, 'y' },
-    { NULL, 0, NULL, 0 }
-  };
-
-  while ((opt = getopt_long(argc, argv, "y:h", long_options, NULL)) != -1) {
-    switch (opt) {
-      case 'h':
-        print_scanner_help();
-        return 0;
-      case 'y':
-        yr_rules = optarg;
-        break;
-      default:
-        print_scanner_help();
-        return 1;
-    }
-  }
-
-  /* Require exactly one file argument */
-  if (optind >= argc) {
-    fprintf(stderr, "Error: No file specified\n\n");
-    print_scanner_help();
-    return 1;
-  }
-
-  if (optind + 1 < argc) {
-    fprintf(stderr, "Error: Too many arguments (only one file at a time)\n\n");
-    print_scanner_help();
-    return 1;
-  }
-
-  filepath = argv[optind];
-
-  /* Initialize scanner */
-  ret = uav_scanner_init(&scanner, yr_rules, NULL);
-  if(ret != 0) {
-    fprintf(stderr, "[ERROR] cannot initialize scanner: %s\n", strerror(errno));
-    goto cleanup;
-  }
-
-  /* Generate malware report */
-  ret = uav_report_generate(&scanner, filepath, &report);
-  if (ret != 0) {
-    /* Report structure contains error details */
-    uav_report_print(&report);
-    goto cleanup;
-  }
-
-  /* Print the report */
-  uav_report_print(&report);
-  ret = 0;
-
-cleanup:
-  uav_scanner_destroy(&scanner);
-  uav_report_destroy(&report);
-  return ret;
-}
-
-/* Command monitor */
-static void print_monitor_help(void) {
-  printf("Usage: uav protect [options]\n\n");
-  printf("Enable runtime malware protection.\n");
-  printf("(Not yet implemented)\n");
-}
-
-static volatile int g_running = 1;
-
-static void sighandler(int signum) {
-  (void) signum;
-  g_running = 0;
-}
-
-static int cmd_monitor_start(int argc, char **argv) {
-
-}
-
-static int cmd_monitor(int argc, char **argv) {
-  (void) argc;
-  (void) argv;
-
-  int ret;
-  struct uav_monitor m;
-
-  signal(SIGINT, sighandler);
-
-  /* Initialize a new monitor */
-  ret = uav_monitor_init(&m);
-  if(ret) {
-    fprintf(stderr, "[MONITOR] cannot init: %s", strerror(errno));
-    goto cleanup;
-  }
-
-  /* Start the monitor */
-  ret = uav_monitor_start(&m);
-  if(ret) {
-    fprintf(stderr, "[MONITOR] cannot start: %s", strerror(errno));
-    goto cleanup;
-  }
-
-  while(g_running) pause();
-
-cleanup:
-  uav_monitor_destroy(&m);
-  return ret;
-}
-
-/* Command sandbox */
-static void print_sandbox_help(void) {
-  printf("Usage: uav sandbox [command]\n\n");
-  printf("Manage sandbox\n\n");
-  printf("Available commands:\n");
-  printf("  run,                Run a new sandbox.\n");
-  printf("  -h, --help          Show this help message\n\n");
-  printf("Examples:\n");
-  printf("  uav sandbox run suspicious.sh\n");
-}
+/* ========================= Sandbox =========================*/
 
 static void print_sandbox_run_help(void) {
-  printf("Usage: uav sandbox run [options] <program> \n\n");
-  printf("Run a program in an isolated sandbox environment.\n\n");
-  printf("Options:\n");
-  printf("  -r, --rootfs PATH   Path to rootfs directory or .zip file\n");
-  printf("  -h, --help          Show this help message\n\n");
+  printf("Usage: uav sandbox run <program> \n\n");
+  printf("Run a program in an isolated environment.\n\n");
   printf("Arguments:\n");
   printf("  program             Program to execute in sandbox\n");
   printf("                      If omitted, drops into interactive shell\n\n");
@@ -176,148 +19,71 @@ static void print_sandbox_run_help(void) {
   printf("  uav sandbox --rootfs /custom/rootfs\n");
 }
 
-static int cmd_sandbox_run(int argc, char **argv) {
-  int ret = 1;
-  int opt;
-  int extract_zip = 0;
+static int cmd_sandbox_run(int argc, const char *argv[]) {
 
-  const char *rootfs_arg = NULL;   /* user-provided */
-  char *rootfs_path = NULL;        /* owned, possibly temp */
-  const char *program = NULL;
-
-  struct uav_sandbox s = {0};
+  int ret;
 
   if(argc < 2) {
     print_sandbox_run_help();
     return 0;
   }
 
-  static const struct option long_options[] = {
-    { "rootfs", required_argument, NULL, 'r' },
-    { "help",   no_argument,       NULL, 'h' },
-    { NULL,     0,                 NULL,  0  }
-  };
+  struct uav_sandbox s;
+  ret = uav_sandbox_create(&s);
 
-  while ((opt = getopt_long(argc, argv, "r:h", long_options, NULL)) != -1) {
-    switch (opt) {
-      case 'r':
-        rootfs_arg = optarg;
-        size_t len = strlen(rootfs_arg);
-        extract_zip = (len > 4 && strcmp(rootfs_arg + len - 4, ".zip") == 0);
-        break;
-      case 'h':
-        print_sandbox_run_help();
-        return 0;
-      default:
-        print_sandbox_run_help();
-        return 1;
-    }
+  if (ret != 0) {
+    fprintf(stderr, "[UAV] cannot created sandbox\n");
+    return ret;
   }
 
-  if (!rootfs_arg) {
-    fprintf(stderr, "[SANDBOX] cannot start: missing rootfs\n");
-    return 1;
+  printf("[UAV] created sandbox in %s\n", s.path);
+
+  ret = uav_sandbox_run_program(0, argv[1]);
+  if (ret != 0) {
+    fprintf(stderr, "[UAV] cannot run sandbox\n");
+    return ret;
   }
 
-  if (optind < argc) {
-    program = argv[optind];
-  }
-
-  /* Prepare rootfs */
-  if (extract_zip) {
-    char template[] = "/tmp/uav_rootfs_XXXXXX";
-
-    if (!mkdtemp(template)) {
-      fprintf(stderr, "mkdtemp failed: %s\n", strerror(errno));
-      goto cleanup;
-    }
-
-    if (zip_extract_directory(rootfs_arg, template) != 0) {
-      fprintf(stderr, "Failed to extract rootfs: %s\n", strerror(errno));
-      rmtree(template);
-      goto cleanup;
-    }
-
-    rootfs_path = strdup(template);
-    if (!rootfs_path) {
-      fprintf(stderr, "Out of memory\n");
-      rmtree(template);
-      goto cleanup;
-    }
-  } else {
-    rootfs_path = strdup(rootfs_arg);
-    if (!rootfs_path) {
-      fprintf(stderr, "Out of memory\n");
-      goto cleanup;
-    }
-  }
-
-  safe_strcpy(s.root, rootfs_path, PATH_MAX);
-
-  const struct uav_sandbox_config config = {
-    .hostip         = "10.10.10.1",
-    .sandboxip      = "10.10.10.2",
-    .hostifname     = "veth1",
-    .sandboxifname  = "veth2",
-    .prefix         = 30,
-  };
-
-  if (uav_sandbox_configure(&s, NULL, &config) != 0) {
-    fprintf(stderr, "Failed to configure sandbox: %s\n", strerror(errno));
-    goto cleanup;
-  }
-
-  if (program) {
-    ret = uav_sandbox_run_program(&s, program);
-  } else {
-    const char shell_script[] = "/tmp/uav_shell.sh";
-
-    if (write_file_str(shell_script, "#!/bin/sh\nexec /bin/sh") != 0 ||
-        chmod(shell_script, 0755) != 0) {
-      fprintf(stderr, "Failed to create shell script: %s\n", strerror(errno));
-      goto cleanup;
-    }
-
-    ret = uav_sandbox_run_program(&s, shell_script);
-    unlink(shell_script);
-  }
-
-cleanup:
   uav_sandbox_destroy(&s);
-
-  if (extract_zip && rootfs_path) rmtree(rootfs_path);
-
-  if(rootfs_path) free(rootfs_path);
-  return ret;
+  return 0;
 }
 
-/* Command functions */
-static int cmd_sandbox(int argc, char **argv) {
+static void print_sandbox_help(void) {
+  printf("Usage: uav sandbox [command]\n\n");
+  printf("Run sandbox\n\n");
+  printf("Available commands:\n");
+  printf("  run,                Run a program in a sandbox\n");
+  printf("  -h, --help          Show this help message\n\n");
+  printf("Examples:\n");
+  printf("  uav sandbox run suspicious.sh\n");
+}
+
+static int cmd_sandbox(int argc, const char *argv[]) {
 
   if(argc < 2) {
     print_sandbox_help();
     return 0;
   }
 
-  if(strcmp("run", argv[1]) == 0) return cmd_sandbox_run(argc - 1, argv + 1);
- 
+  if(strcmp("run", argv[1]) == 0)
+    return cmd_sandbox_run(argc - 1, argv + 1);
   print_sandbox_help();
 
   return 1;
 }
 
+/* ========================= Sandbox =========================*/
+
 /* Command dispatch table */
 struct command {
   const char *name;
-  int (*func)(int argc, char **argv);
+  int (*func)(int argc, const char *argv[]);
   void (*help)(void);
   const char *brief;
 };
 
 static const struct command commands[] = {
-  { "sandbox", cmd_sandbox, print_sandbox_help, "Run programs in isolated environment" },
-  { "scan", cmd_scan, print_scanner_help, "Scan files for malware signatures" },
-  { "monitor", cmd_monitor, print_monitor_help, "Manage monitoring system" },
+  {"sandbox", cmd_sandbox, print_sandbox_help, "Execute and controls sandbox"},
   { NULL, NULL, NULL, NULL }
 };
 
@@ -332,7 +98,7 @@ static void print_usage(const char *progname) {
   printf("\nUse '%s <command> --help' for command-specific options\n", progname);
 }
 
-int main(int argc, char **argv) {
+int main(int argc, const char *argv[]) {
   if (argc < 2) {
     print_usage(argv[0]);
     return 1;
