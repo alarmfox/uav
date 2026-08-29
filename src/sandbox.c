@@ -45,9 +45,11 @@ static int uav_sandbox_prepare_runtime(const struct uav_sandbox *s);
 static int uav_sandbox_pivot_root(const struct uav_sandbox *s);
 static int uav_sandbox_copyfile(const struct uav_sandbox *s, const char *src, const char *dst);
 static int uav_sandbox_exec_entrypoint(const char *program);
+static int uav_sandbox_namespace_run(const struct uav_sandbox * s, const char *program);
+static int uav_sandbox_kvm_run(const struct uav_sandbox * s, const char *program);
 static int sandbox_entrypoint(void *ptr);
 
-int uav_sandbox_create(struct uav_sandbox *s) {
+int uav_sandbox_create(struct uav_sandbox *s, enum uav_sandbox_backend type) {
   int ret = 0;
 
   /* Safe because there is _Static_assert in config.h */
@@ -55,7 +57,14 @@ int uav_sandbox_create(struct uav_sandbox *s) {
 
   if(mkdtemp(s->path) == NULL) return 1;
 
-  s->stack = uav_malloc(UAV_SANDBOX_STACK_SIZE);
+  s->backend = type;
+  switch (type) {
+  case UAV_BACKEND_NAMESPACE:
+    s->data.stack = uav_malloc(UAV_SANDBOX_STACK_SIZE);
+    break;
+  case UAV_BACKEND_KVM:
+    break;
+  }
 
   /* Prepare overlay fs */
   char *paths[4] = { NULL };
@@ -97,6 +106,25 @@ struct uav_sandbox_entrypoint_args {
 };
 
 int uav_sandbox_run_program(const struct uav_sandbox *s, const char *program) {
+  switch (s->backend) {
+    case UAV_BACKEND_NAMESPACE:
+      return uav_sandbox_namespace_run(s, program);
+
+    case UAV_BACKEND_KVM:
+      return uav_sandbox_kvm_run(s, program);
+      fprintf(stderr, "[UAV](%s:%d) backend %s not implemented\n" , __FILE__, __LINE__, backend_names[s->backend]);
+  }
+
+  return -1;
+}
+
+static int uav_sandbox_kvm_run(const struct uav_sandbox *s, const char *program) {
+  (void) program;
+  fprintf(stderr, "[UAV](%s:%d) backend %s not implemented\n" , __FILE__, __LINE__, backend_names[s->backend]);
+  return -1;
+}
+
+static int uav_sandbox_namespace_run(const struct uav_sandbox *s, const char *program) {
   pid_t child;
   int control_fd[2] = {-1, -1}, ret = 0;
   uid_t uid;
@@ -116,7 +144,7 @@ int uav_sandbox_run_program(const struct uav_sandbox *s, const char *program) {
   args->program = program;
   args->control_fd = control_fd[1];
 
-  child = clone(sandbox_entrypoint, (char*)s->stack + UAV_SANDBOX_STACK_SIZE,
+  child = clone(sandbox_entrypoint, (char*)s->data.stack + UAV_SANDBOX_STACK_SIZE,
       CLONE_NEWUSER |
       CLONE_NEWPID |
       CLONE_NEWNS |
@@ -183,9 +211,9 @@ void uav_sandbox_destroy(struct uav_sandbox *s) {
   char *p = uav_path_join(s->path, "/merged");
 
   if (s == NULL) return;
-  if (s->stack != NULL) {
-    free(s->stack);
-    s->stack = NULL;
+  if (s->data.stack != NULL) {
+    free(s->data.stack);
+    s->data.stack = NULL;
   }
 
   free(p);
@@ -538,7 +566,6 @@ out:
 }
 
 static int uav_sandbox_exec_entrypoint(const char *program) {
-
   char *const envp[] = {
     "PATH=/bin:/sbin:/usr/bin:/usr/sbin",
     "TERM=xterm",

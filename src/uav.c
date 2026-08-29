@@ -24,17 +24,16 @@ static int cmd_sandbox_run(int argc, const char *argv[]) {
 
   if(argc < 2) {
     print_sandbox_run_help();
-    return 0;
+    goto cleanup;
   }
 
   struct uav_sandbox s;
-  ret = uav_sandbox_create(&s);
+  ret = uav_sandbox_create(&s, UAV_BACKEND_NAMESPACE);
 
   if (ret != 0) {
-    fprintf(stderr, "[UAV] cannot created sandbox\n");
-    return ret;
+    fprintf(stderr, "[UAV] cannot creat sandbox\n");
+    goto cleanup;
   }
-
   printf("[UAV] created sandbox in %s\n", s.path);
 
   ret = uav_sandbox_run_program(&s, argv[1]);
@@ -43,9 +42,9 @@ static int cmd_sandbox_run(int argc, const char *argv[]) {
     goto cleanup;
   }
 
+  printf("[UAV] destroyed sandbox in %s\n", s.path);
 cleanup:
   uav_sandbox_destroy(&s);
-  printf("[UAV] destroyed sandbox in %s\n", s.path);
   return 0;
 }
 
