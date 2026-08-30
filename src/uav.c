@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <getopt.h>
 #include <stdio.h>
 #include <string.h>
@@ -13,9 +14,7 @@ static void print_sandbox_run_help(void) {
   printf("  program             Program to execute in sandbox\n");
   printf("                      If omitted, drops into interactive shell\n\n");
   printf("Examples:\n");
-  printf("  uav sandbox suspicious.sh\n");
-  printf("  uav sandbox --rootfs custom.zip malware.elf\n");
-  printf("  uav sandbox --rootfs /custom/rootfs\n");
+  printf("  uav sandbox run suspicious.sh\n");
 }
 
 static int cmd_sandbox_run(int argc, const char *argv[]) {
@@ -28,17 +27,17 @@ static int cmd_sandbox_run(int argc, const char *argv[]) {
   }
 
   struct uav_sandbox s;
-  ret = uav_sandbox_create(&s, UAV_BACKEND_NAMESPACE);
+
+  ret = uav_sandbox_create(&s, UAV_BACKEND_KVM);
 
   if (ret != 0) {
-    fprintf(stderr, "[UAV] cannot creat sandbox\n");
+    fprintf(stderr, "[UAV] cannot create sandbox: %s\n", strerror(errno));
     goto cleanup;
   }
-  printf("[UAV] created sandbox in %s\n", s.path);
 
   ret = uav_sandbox_run_program(&s, argv[1]);
   if (ret != 0) {
-    fprintf(stderr, "[UAV] cannot run sandbox\n");
+    fprintf(stderr, "[UAV] cannot run sandbox: %s\n", strerror(errno));
     goto cleanup;
   }
 
