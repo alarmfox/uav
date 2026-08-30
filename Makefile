@@ -1,5 +1,5 @@
 CPPFLAGS       = -Isrc/ -D_XOPEN_SOURCE=500 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
-CFLAGS         = -Wall -Wextra -std=c11
+CFLAGS         = -Wall -Wextra -std=c11 -fstack-protector
 LDFLAGS        = -larchive
 
 ifeq ($(DEBUG),1)
