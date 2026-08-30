@@ -12,6 +12,11 @@ int uav_sandbox_proto_send(int fd, uint16_t type, const void *payload, uint32_t 
   unsigned char buf[12];
   int ret;
 
+  if(length > UAV_SANDBOX_PROTO_MAX_PAYLOAD) {
+    errno = EMSGSIZE;
+    return -1;
+  }
+
   uint32_t magic = htonl(UAV_SANDBOX_PROTO_MAGIC);
   uint16_t ver   = htons(UAV_SANDBOX_PROTO_VERSION);
   uint16_t typ   = htons(type);

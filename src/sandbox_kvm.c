@@ -375,7 +375,11 @@ static int kvm_load_images(const struct uav_sandbox *s) {
 
   /* Command line. */
   {
+#if DEBUG
     const char *cmdline = "console=ttyS0 acpi=off pci=off";
+#else
+    const char *cmdline = "acpi=off pci=off";
+#endif
     size_t cmdline_len = strlen(cmdline) + 1;
 
     if (boot->hdr.cmdline_size != 0 && cmdline_len > boot->hdr.cmdline_size) {

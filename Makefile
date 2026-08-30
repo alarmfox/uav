@@ -5,6 +5,7 @@ LDLIBS         = -larchive
 
 ifeq ($(DEBUG),1)
 CFLAGS        += -O0 -g
+CPPFLAGS      += -DDEBUG
 else
 CPPFLAGS      += -D_FORTIFY_SOURCE=2
 CFLAGS        += -O2
