@@ -42,6 +42,4 @@ int uav_sandbox_create(struct uav_sandbox *s, enum uav_sandbox_backend type);
 int uav_sandbox_run_program(const struct uav_sandbox *s, const char *program);
 void uav_sandbox_destroy(struct uav_sandbox *s);
 
-static const char *subdirs[] = { "/base","/merged", "/upper", "/work"};
-
 #endif //! UAV_SANDBOX_H

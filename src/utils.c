@@ -47,7 +47,7 @@ char *uav_path_join(const char *p1, const char *p2) {
 
   size_t len = l1 + l2 + add_slash - skip;
 
-  char *r = (char *)uav_malloc(len);
+  char *r = (char *)uav_malloc(len + 1);
   memcpy(r, p1, l1);
 
   size_t pos = l1;
@@ -86,19 +86,62 @@ int write_file_str(const char *path, const char *str) {
 }
 
 int copyfile(const char *src, const char *dst) {
+  static const char temp_name[] = ".uav-copy-XXXXXX";
   int srcfd = -1, dstfd = -1;
   unsigned char buf[8192];
+  struct stat src_stat;
+  char *temp_path = NULL;
+  const char *slash;
+  size_t dst_len;
+  size_t dir_len;
+  int renamed = 0;
   int ret = -1;
+  int saved_errno;
 
-  srcfd = open(src, O_RDONLY);
+  if (src == NULL || dst == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  dst_len = strnlen(dst, PATH_MAX);
+  if (dst_len == 0 || dst_len == PATH_MAX) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+
+  srcfd = open(src, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
   if (srcfd < 0) {
     fprintf(stderr, "[UAV] cannot open source %s: %s\n", src, strerror(errno));
     goto cleanup;
   }
 
-  dstfd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fstat(srcfd, &src_stat) < 0)
+    goto cleanup;
+
+  if (!S_ISREG(src_stat.st_mode)) {
+    errno = EINVAL;
+    goto cleanup;
+  }
+
+  /*
+   * Create the temporary file in the destination directory so rename()
+   * cannot cross filesystems and replacement of dst is atomic.
+   */
+  slash = strrchr(dst, '/');
+  dir_len = slash != NULL ? (size_t)(slash - dst) + 1 : 0;
+
+  if (dir_len > PATH_MAX - sizeof(temp_name)) {
+    errno = ENAMETOOLONG;
+    goto cleanup;
+  }
+
+  temp_path = uav_malloc(dir_len + sizeof(temp_name));
+  memcpy(temp_path, dst, dir_len);
+  memcpy(temp_path + dir_len, temp_name, sizeof(temp_name));
+
+  dstfd = mkostemp(temp_path, O_CLOEXEC);
   if (dstfd < 0) {
-    fprintf(stderr, "[UAV] cannot open destination %s: %s\n", dst, strerror(errno));
+    fprintf(stderr, "[UAV] cannot create temporary destination for %s: %s\n", dst, strerror(errno));
     goto cleanup;
   }
 
@@ -131,18 +174,48 @@ int copyfile(const char *src, const char *dst) {
         goto cleanup;
       }
 
+      if (nwrite == 0) {
+        errno = EIO;
+        fprintf(stderr, "[UAV] write made no progress\n");
+        goto cleanup;
+      }
+
       written += nwrite;
     }
   }
 
+  if (fchmod(dstfd, src_stat.st_mode & 0777) < 0)
+    goto cleanup;
+
+  /* Surface delayed write errors before publishing the completed file. */
+  if (close(dstfd) < 0) {
+    dstfd = -1;
+    goto cleanup;
+  }
+  dstfd = -1;
+
+  if (rename(temp_path, dst) < 0) {
+    fprintf(stderr, "[UAV] cannot publish destination %s: %s\n", dst, strerror(errno));
+    goto cleanup;
+  }
+
+  renamed = 1;
   ret = 0;
 
 cleanup:
+  saved_errno = errno;
+
   if (srcfd >= 0)
     close(srcfd);
 
   if (dstfd >= 0)
     close(dstfd);
+
+  if (temp_path != NULL && !renamed)
+    unlink(temp_path);
+
+  free(temp_path);
+  errno = saved_errno;
 
   return ret;
 }

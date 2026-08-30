@@ -67,24 +67,33 @@ error:
   return ret;
 }
 
-struct uav_uart {
-  uint8_t ier;
-  uint8_t lcr;
-  uint8_t mcr;
-  uint8_t scr;
-};
-
 int uav_sandbox_kvm_run(const struct uav_sandbox *s, const char *program) {
   int kvmfd = -1;
   int ret = -1;
   int shouldexit = 0;
+  int mmap_size;
+  size_t run_size;
+  struct kvm_run *run = NULL;
 
   kvmfd = open("/dev/kvm", O_RDWR);
-  if(kvmfd < 0) goto error;
+  if(kvmfd < 0) goto out;
 
   /* Run the KVM vCPU */
-  int run_size = ioctl(kvmfd, KVM_GET_VCPU_MMAP_SIZE, 0);
-  struct kvm_run *run = mmap(0, run_size, PROT_READ | PROT_WRITE, MAP_SHARED, s->data.kvm.vcpufd, 0);
+  mmap_size = ioctl(kvmfd, KVM_GET_VCPU_MMAP_SIZE, 0);
+
+  if (mmap_size < 0) goto out;
+  if((size_t) mmap_size < sizeof(struct kvm_run)) {
+    errno = EPROTO;
+    goto out;
+  }
+
+  run_size = (size_t)mmap_size;
+  run = mmap(0, run_size, PROT_READ | PROT_WRITE, MAP_SHARED, s->data.kvm.vcpufd, 0);
+
+  if(run == MAP_FAILED) {
+    run = NULL;
+    goto out;
+  }
 
   while(!shouldexit) {
     /* Execute the VCPU */
@@ -96,9 +105,11 @@ int uav_sandbox_kvm_run(const struct uav_sandbox *s, const char *program) {
       continue;
     }
     switch (run->exit_reason) {
+      case KVM_EXIT_HLT:
       case KVM_EXIT_SHUTDOWN:
         shouldexit = 1;
-        break;
+        ret = 0;
+        goto out;
 
       case KVM_EXIT_INTERNAL_ERROR:
         fprintf(stderr, "======================");
@@ -110,12 +121,10 @@ int uav_sandbox_kvm_run(const struct uav_sandbox *s, const char *program) {
           fprintf(stderr, "data[%u] = 0x%llx\n", i, (unsigned long long)run->internal.data[i]);
         fprintf(stderr, "======================");
         shouldexit = 1;
+        ret = -1;
+        errno = EIO;
         break;
 
-      case KVM_EXIT_HLT:
-        fprintf(stderr, "[UAV] KVM Guest halted\n");
-        shouldexit = 1;
-        break;
       case KVM_EXIT_IO: {
         uint8_t *data = (uint8_t *)run + run->io.data_offset;
         size_t len = run->io.size * run->io.count;
@@ -162,17 +171,21 @@ int uav_sandbox_kvm_run(const struct uav_sandbox *s, const char *program) {
       default:
         fprintf(stderr, "[UAV] KVM unknown exit_reason: %d\n", run->exit_reason);
         shouldexit = 1;
+        ret = -1;
+        errno = EIO;
         break;
     }
   }
 
-  ret = 0;
-error:
+out:
   if (kvmfd >= 0) close(kvmfd);
+  if (run != NULL) munmap(run, run_size);
   return ret;
 }
 
 void uav_sandbox_kvm_destroy(struct uav_sandbox *s) {
+  if(s == NULL) return;
+
   if (s->data.kvm.guestfd >= 0) close(s->data.kvm.guestfd);
   if (s->data.kvm.vcpufd >= 0) close(s->data.kvm.vcpufd);
   if (s->data.kvm.guestmem != NULL) munmap(s->data.kvm.guestmem, s->data.kvm.guestmem_size);

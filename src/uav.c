@@ -10,9 +10,12 @@
 static void print_sandbox_run_help(void) {
   printf("Usage: uav sandbox run <program> \n\n");
   printf("Run a program in an isolated environment.\n\n");
+  printf("Options:\n");
+  printf("  -b, --backend <backend> Isolation technology. 'container' or 'kvm' allowed\n");
+  printf("  -h, --help              Show this help message\n\n");
   printf("Arguments:\n");
-  printf("  program             Program to execute in sandbox\n");
-  printf("                      If omitted, drops into interactive shell\n\n");
+  printf("  program                 Program to execute in sandbox\n");
+  printf("                          If omitted, drops into interactive shell\n\n");
   printf("Examples:\n");
   printf("  uav sandbox run suspicious.sh\n");
 }
@@ -20,30 +23,68 @@ static void print_sandbox_run_help(void) {
 static int cmd_sandbox_run(int argc, const char *argv[]) {
 
   int ret = -1;
+  int opt;
+  struct uav_sandbox s;
+  enum uav_sandbox_backend backend = UAV_SANDBOX_BACKEND_NS;
+  const char* program = NULL;
 
-  if(argc < 2) {
-    print_sandbox_run_help();
-    goto cleanup;
+  static const struct option long_options[] = {
+    { "backend", required_argument, NULL, 'b' },
+    { "help",   no_argument,       NULL, 'h' },
+    { NULL,     0,                 NULL,  0  }
+  };
+
+  while ((opt = getopt_long(argc, (char *const *)argv, "b:h", long_options, NULL)) != -1) {
+    switch (opt) {
+      case 'b':
+        if (!strcmp(optarg, "kvm")) backend = UAV_SANDBOX_BACKEND_KVM;
+        else if (!strcmp(optarg, "container")) backend = UAV_SANDBOX_BACKEND_NS;
+        else {
+          fprintf(stderr, "[UAV] invalid sandbox backend %s. Allowed 'kvm' or 'container'.\n", optarg);
+          print_sandbox_run_help();
+          return 1;
+        }
+        break;
+      case 'h':
+        print_sandbox_run_help();
+        return 0;
+      default:
+        print_sandbox_run_help();
+        return 1;
+    }
   }
 
-  struct uav_sandbox s;
+  if (optind >= argc) {
+    fprintf(stderr, "[UAV] missing program\n");
+    print_sandbox_run_help();
+    return 1;
+  }
 
-  ret = uav_sandbox_create(&s, UAV_SANDBOX_BACKEND_NS);
+  if (optind + 1 != argc) {
+    fprintf(stderr, "[UAV] unexpected argument: %s\n", argv[optind + 1]);
+    print_sandbox_run_help();
+    return 1;
+  }
+
+  program = argv[optind];
+
+  ret = uav_sandbox_create(&s, backend);
 
   if (ret != 0) {
     fprintf(stderr, "[UAV] cannot create sandbox: %s\n", strerror(errno));
     goto cleanup;
   }
 
-  ret = uav_sandbox_run_program(&s, argv[1]);
+  ret = uav_sandbox_run_program(&s, program);
   if (ret != 0) {
     fprintf(stderr, "[UAV] cannot run sandbox: %s\n", strerror(errno));
     goto cleanup;
   }
 
+  ret = 0;
 cleanup:
   uav_sandbox_destroy(&s);
-  return 0;
+  return ret;
 }
 
 static void print_sandbox_help(void) {

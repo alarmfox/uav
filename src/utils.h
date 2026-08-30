@@ -17,13 +17,23 @@ static inline void* uav_malloc(size_t size) {
 }
 
 static inline int mkdir_if_missing(const char *path, mode_t mode) {
-  if (mkdir(path, mode) == 0)
-    return 0;
+  struct stat st;
+  int ret = -1;
 
-  if (errno == EEXIST)
-    return 0;
+  ret = mkdir(path, mode);
+  if (ret == 0)  return 0;
 
-  return -1;
+  if (errno != EEXIST) return -1;
+
+  ret = lstat(path, &st);
+  if (ret < 0) return -1;
+
+  if (!S_ISDIR(st.st_mode)) {
+    errno = ENOTDIR;
+    return -1;
+  }
+
+  return 0;
 }
 
 int rmtree(const char *path);
