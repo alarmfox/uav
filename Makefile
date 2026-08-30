@@ -1,10 +1,12 @@
 CPPFLAGS       = -Isrc/ -D_XOPEN_SOURCE=500 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
-CFLAGS         = -Wall -Wextra -std=c11 -fstack-protector
-LDFLAGS        = -larchive
+CFLAGS         = -Wall -Wextra -std=c11 -fstack-protector-strong -fPIE
+LDFLAGS        = -pie -Wl,-z,relro,-z,now
+LDLIBS         = -larchive
 
 ifeq ($(DEBUG),1)
 CFLAGS        += -O0 -g
 else
+CPPFLAGS      += -D_FORTIFY_SOURCE=2
 CFLAGS        += -O2
 endif
 
@@ -19,7 +21,7 @@ OBJS           = src/uav.o src/utils.o src/sandbox.o src/sandbox_protocol.o src/
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(CC) $(LDFLAGS) -o $@ $^
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
