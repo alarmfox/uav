@@ -77,13 +77,7 @@ int uav_sandbox_proto_recv(int fd, struct uav_sandbox_proto_msg *msg) {
     return -1;
   }
 
-  if (msg->length > 0) {
-    ret = uav_read_all(fd, msg->payload, msg->length);
-    if (ret < 0) return ret;
-    msg->payload[msg->length] = 0;
-  }
-
-  return 0;
+  return msg->length > 0 ? ret = uav_read_all(fd, msg->payload, msg->length) : 0;
 }
 
 static int uav_write_all(int fd, const void *buf, size_t len) {
