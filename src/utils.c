@@ -30,12 +30,17 @@ int rmtree(const char *path) {
  * "/tmp/" + "/work"  -> "/tmp/work"
  */
 char *uav_path_join(const char *p1, const char *p2) {
-  if (p1 == NULL || p2 == NULL) return NULL;
+  if (p1 == NULL || p2 == NULL) {
+    errno = EINVAL;
+    return NULL;
+  }
   size_t l1 = strnlen(p1, PATH_MAX);
   size_t l2 = strnlen(p2, PATH_MAX);
 
-  if (l1 == PATH_MAX || l2 == PATH_MAX)
-        return NULL;
+  if (l1 == PATH_MAX || l2 == PATH_MAX) {
+    errno = ENAMETOOLONG;
+    return NULL;
+  }
 
   int p1_slash = l1 > 0 && p1[l1 - 1] == '/';
   int p2_slash = l2 > 0 && p2[l2 - 1] == '/';
@@ -43,7 +48,10 @@ char *uav_path_join(const char *p1, const char *p2) {
   size_t skip = p1_slash && p2_slash ? 1 : 0;
   size_t add_slash = !p1_slash && !p2_slash ? 1 : 0;
 
-  if (l1 > PATH_MAX - l2 - add_slash - 1 + skip)  return NULL;
+  if (l1 > PATH_MAX - l2 - add_slash - 1 + skip) {
+    errno = ENAMETOOLONG;
+    return NULL;
+  }
 
   size_t len = l1 + l2 + add_slash - skip;
 
@@ -69,7 +77,11 @@ int write_file(const char *path, const char *data, size_t len) {
   if (fd < 0) goto cleanup;
 
   written = write(fd, data, len);
-  if (written < 0 || (size_t)written != len) goto cleanup;
+  if (written < 0) goto cleanup;
+  if ((size_t)written != len) {
+    errno = EIO;
+    goto cleanup;
+  }
 
   ret = 0;
 

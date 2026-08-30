@@ -61,7 +61,6 @@ int uav_sandbox_proto_recv(int fd, struct uav_sandbox_proto_msg *msg) {
   msg->type    = ntohs(type);
   msg->length  = ntohl(length);
 
-
   if (msg->magic != UAV_SANDBOX_PROTO_MAGIC) {
     errno = EPROTO;
     return -1;

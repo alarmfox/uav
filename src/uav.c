@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "sandbox.h"
@@ -22,7 +23,7 @@ static void print_sandbox_run_help(void) {
 
 static int cmd_sandbox_run(int argc, const char *argv[]) {
 
-  int ret = -1;
+  int ret = EXIT_FAILURE;
   int opt;
   struct uav_sandbox s;
   enum uav_sandbox_backend backend = UAV_SANDBOX_BACKEND_NS;
@@ -42,28 +43,28 @@ static int cmd_sandbox_run(int argc, const char *argv[]) {
         else {
           fprintf(stderr, "[UAV] invalid sandbox backend %s. Allowed 'kvm' or 'container'.\n", optarg);
           print_sandbox_run_help();
-          return 1;
+          return EXIT_FAILURE;
         }
         break;
       case 'h':
         print_sandbox_run_help();
-        return 0;
+        return EXIT_SUCCESS;
       default:
         print_sandbox_run_help();
-        return 1;
+        return EXIT_FAILURE;
     }
   }
 
   if (optind >= argc) {
     fprintf(stderr, "[UAV] missing program\n");
     print_sandbox_run_help();
-    return 1;
+    return EXIT_FAILURE;
   }
 
   if (optind + 1 != argc) {
     fprintf(stderr, "[UAV] unexpected argument: %s\n", argv[optind + 1]);
     print_sandbox_run_help();
-    return 1;
+    return EXIT_FAILURE;
   }
 
   program = argv[optind];
@@ -72,16 +73,18 @@ static int cmd_sandbox_run(int argc, const char *argv[]) {
 
   if (ret != 0) {
     fprintf(stderr, "[UAV] cannot create sandbox: %s\n", strerror(errno));
+    ret = EXIT_FAILURE;
     goto cleanup;
   }
 
   ret = uav_sandbox_run_program(&s, program);
   if (ret != 0) {
     fprintf(stderr, "[UAV] cannot run sandbox: %s\n", strerror(errno));
+    ret = EXIT_FAILURE;
     goto cleanup;
   }
 
-  ret = 0;
+  ret = EXIT_SUCCESS;
 cleanup:
   uav_sandbox_destroy(&s);
   return ret;
@@ -101,14 +104,14 @@ static int cmd_sandbox(int argc, const char *argv[]) {
 
   if(argc < 2) {
     print_sandbox_help();
-    return 0;
+    return EXIT_SUCCESS;
   }
 
   if(strcmp("run", argv[1]) == 0)
     return cmd_sandbox_run(argc - 1, argv + 1);
   print_sandbox_help();
 
-  return 1;
+  return EXIT_FAILURE;
 }
 
 /* ========================= Sandbox =========================*/
@@ -140,13 +143,13 @@ static void print_usage(const char *progname) {
 int main(int argc, const char *argv[]) {
   if (argc < 2) {
     print_usage(argv[0]);
-    return 1;
+    return EXIT_FAILURE;
   }
 
   /* Handle global flags */
   if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
     print_usage(argv[0]);
-    return 0;
+    return EXIT_SUCCESS;
   }
 
   /* Dispatch to subcommand */
@@ -158,5 +161,5 @@ int main(int argc, const char *argv[]) {
 
   fprintf(stderr, "Unknown command: %s\n", argv[1]);
   print_usage(argv[0]);
-  return 1;
+  return EXIT_FAILURE;
 }

@@ -27,11 +27,12 @@ int uav_sandbox_create(struct uav_sandbox *s, enum uav_sandbox_backend type) {
       return uav_sandbox_kvm_create(s);
   }
 
+  errno = EINVAL;
   return -1;
 }
 
 int uav_sandbox_run_program(const struct uav_sandbox *s, const char *program) {
-  if(s == NULL) {
+  if(s == NULL || program == NULL) {
     errno = EINVAL;
     return -1;
   }
@@ -43,6 +44,7 @@ int uav_sandbox_run_program(const struct uav_sandbox *s, const char *program) {
       return uav_sandbox_kvm_run(s, program);
   }
 
+  errno = EINVAL;
   return -1;
 }
 

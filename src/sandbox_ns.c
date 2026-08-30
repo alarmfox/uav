@@ -54,7 +54,7 @@ struct uav_sandbox_entrypoint_args {
 
 int uav_sandbox_ns_create(struct uav_sandbox *s) {
   char *paths[4] = { NULL , NULL, NULL, NULL };
-  int ret = 1;
+  int ret = -1;
 
   /* Safe because there is a _Static_assert in config.h. */
   strcpy(s->data.ns.path, UAV_SANDBOX_DIR "/uav_sandbox_XXXXXX");
@@ -98,7 +98,7 @@ cleanup:
 int uav_sandbox_ns_run(const struct uav_sandbox *s, const char *program) {
   pid_t child = -1;
   int control_fd[2] = { -1, -1 };
-  int ret = 1;
+  int ret = -1;
   int saved_errno;
   int wstatus;
   uid_t uid;
@@ -109,7 +109,7 @@ int uav_sandbox_ns_run(const struct uav_sandbox *s, const char *program) {
 
   if (s == NULL || program == NULL) {
     errno = EINVAL;
-    return 1;
+    return -1;
   }
 
   /*
@@ -119,7 +119,7 @@ int uav_sandbox_ns_run(const struct uav_sandbox *s, const char *program) {
   program_len = strnlen(program, UAV_SANDBOX_PROTO_MAX_PAYLOAD);
   if (program_len == UAV_SANDBOX_PROTO_MAX_PAYLOAD) {
     errno = ENAMETOOLONG;
-    return 1;
+    return -1;
   }
   program_len++;
 
@@ -211,7 +211,7 @@ int uav_sandbox_ns_run(const struct uav_sandbox *s, const char *program) {
     ret = 0;
   } else {
     errno = EIO;
-    ret = 1;
+    ret = -1;
   }
 
 cleanup:
@@ -285,7 +285,8 @@ static int uav_extract_initramfs(const char *archive_path, const char *base) {
   int base_fd = -1;
   int cwd_changed = 0;
   int ar;
-  int ret = 1;
+  int ret = -1;
+  int saved_errno;
 
   /*
    * Open everything before chdir(), because archive_path may be relative.
@@ -312,6 +313,7 @@ static int uav_extract_initramfs(const char *archive_path, const char *base) {
   a = archive_read_new();
   if (a == NULL) {
     fprintf(stderr, "[UAV] cannot allocate archive reader\n");
+    errno = ENOMEM;
     goto out;
   }
 
@@ -321,12 +323,14 @@ static int uav_extract_initramfs(const char *archive_path, const char *base) {
   ar = archive_read_open_fd(a, archive_fd, 10240);
   if (ar != ARCHIVE_OK) {
     fprintf(stderr, "[UAV] cannot read %s: %s\n", archive_path, archive_error_string(a));
+    errno = EIO;
     goto out;
   }
 
   ext = archive_write_disk_new();
   if (ext == NULL) {
     fprintf(stderr, "[UAV] cannot allocate archive extractor\n");
+    errno = ENOMEM;
     goto out;
   }
 
@@ -342,6 +346,7 @@ static int uav_extract_initramfs(const char *archive_path, const char *base) {
       );
   if (ar != ARCHIVE_OK) {
     fprintf(stderr, "[UAV] cannot configure archive extractor: %s\n", archive_error_string(ext));
+    errno = EIO;
     goto out;
   }
 
@@ -362,6 +367,7 @@ static int uav_extract_initramfs(const char *archive_path, const char *base) {
     ar = archive_read_extract2(a, entry, ext);
     if (ar != ARCHIVE_OK) {
       fprintf(stderr, "[UAV] cannot extract %s: %s\n", name != NULL ? name : "(unknown)", archive_error_string(a));
+      errno = EIO;
       goto out;
     }
   }
@@ -372,12 +378,15 @@ static int uav_extract_initramfs(const char *archive_path, const char *base) {
    */
   if (ar != ARCHIVE_EOF) {
     fprintf(stderr, "[UAV] archive read failed: %s\n", archive_error_string(a));
+    errno = EIO;
     goto out;
   }
 
   ret = 0;
 
 out:
+  saved_errno = errno;
+
   /*
    * Finish extraction while paths are still relative to base.
    */
@@ -391,7 +400,8 @@ out:
 
   if (cwd_changed && fchdir(cwd_fd) < 0) {
     fprintf(stderr, "[UAV] cannot restore working directory: %s\n", strerror(errno));
-    ret = 1;
+    saved_errno = errno;
+    ret = -1;
   }
 
   if (base_fd >= 0)
@@ -405,6 +415,9 @@ out:
    */
   if (archive_fd >= 0)
     close(archive_fd);
+
+  if (ret < 0)
+    errno = saved_errno != 0 ? saved_errno : EIO;
 
   return ret;
 }
