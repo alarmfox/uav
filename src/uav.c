@@ -41,7 +41,6 @@ static int cmd_sandbox_run(int argc, const char *argv[]) {
     goto cleanup;
   }
 
-  printf("[UAV] destroyed sandbox in %s\n", s.path);
 cleanup:
   uav_sandbox_destroy(&s);
   return 0;

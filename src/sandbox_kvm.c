@@ -67,6 +67,13 @@ error:
   return ret;
 }
 
+struct uav_uart {
+  uint8_t ier;
+  uint8_t lcr;
+  uint8_t mcr;
+  uint8_t scr;
+};
+
 int uav_sandbox_kvm_run(const struct uav_sandbox *s, const char *program) {
   int kvmfd = -1;
   int ret = -1;
@@ -109,18 +116,54 @@ int uav_sandbox_kvm_run(const struct uav_sandbox *s, const char *program) {
         fprintf(stderr, "[UAV] KVM Guest halted\n");
         shouldexit = 1;
         break;
-      case KVM_EXIT_IO:
-        if (run->io.direction == KVM_EXIT_IO_OUT && run->io.port == 0xe9) {
-          write(STDOUT_FILENO, (uint8_t *)run + run->io.data_offset, run->io.count);
+      case KVM_EXIT_IO: {
+        uint8_t *data = (uint8_t *)run + run->io.data_offset;
+        size_t len = run->io.size * run->io.count;
+
+        if (run->io.direction == KVM_EXIT_IO_IN) {
+          for (unsigned i = 0; i < run->io.count; i++) {
+            uint8_t *value = data + i * run->io.size;
+
+            switch (run->io.port) {
+              case 0x3fd:
+                value[0] = 0x60;
+                break;
+
+              default:
+                memset(value, 0, run->io.size);
+                break;
+            }
+          }
+        } else {
+          switch (run->io.port) {
+            case 0x3f8:
+              write(STDOUT_FILENO, data, len);
+              break;
+          }
         }
         break;
+      }
+      case KVM_EXIT_MMIO:
+        fprintf(stderr,  "[UAV] MMIO: addr=0x%llx len=%u write=%u data=", (unsigned long long)run->mmio.phys_addr, run->mmio.len, run->mmio.is_write);
 
+        for (unsigned i = 0; i < run->mmio.len; i++)
+          fprintf(stderr, "%02x ", run->mmio.data[i]);
+
+        fprintf(stderr, "\n");
+
+        /*
+         * For an MMIO read, userspace must provide the value
+         * before calling KVM_RUN again.
+         */
+        if (!run->mmio.is_write)
+          memset(run->mmio.data, 0, run->mmio.len);
+
+        break;
       default:
         fprintf(stderr, "[UAV] KVM unknown exit_reason: %d\n", run->exit_reason);
         shouldexit = 1;
         break;
     }
-
   }
 
   ret = 0;
@@ -212,8 +255,12 @@ static int kvm_load_images(const struct uav_sandbox *s) {
   struct stat st;
   void *data = MAP_FAILED;
   size_t data_size = 0;
+  size_t kernel_size;
   unsigned setup_sects;
-  size_t setup_size, kernel_size;
+  size_t setup_size;
+  uint64_t kernel_end;
+  uint64_t initrd_top;
+  uint64_t initrd_addr64;
   uint32_t initrd_addr;
   int fd = -1;
   int ret = -1;
@@ -232,7 +279,7 @@ static int kvm_load_images(const struct uav_sandbox *s) {
 
   if (fstat(fd, &st) < 0) goto out;
 
-  if (st.st_size < (off_t)sizeof(struct boot_params)) {
+  if (st.st_size < 0x202) {
     errno = EINVAL;
     goto out;
   }
@@ -244,13 +291,19 @@ static int kvm_load_images(const struct uav_sandbox *s) {
   close(fd);
   fd = -1;
 
-  memset(boot, 0, sizeof(*boot));
-  memcpy(boot, data, sizeof(*boot));
-
   /*
-   * Linux 32-bit boot protocol. Boot directly into protected mode
-   * without a bootloader.
+   * boot_params must be zero initialized.
+   * Only copy the setup header from the bzImage.
    */
+  memset(boot, 0, sizeof(*boot));
+
+  if (0x1f1 + sizeof(boot->hdr) > data_size) {
+    errno = EINVAL;
+    goto out;
+  }
+
+  memcpy(&boot->hdr, (uint8_t *)data + 0x1f1, sizeof(boot->hdr));
+
   if (boot->hdr.boot_flag != 0xaa55) {
     errno = EINVAL;
     goto out;
@@ -272,24 +325,63 @@ static int kvm_load_images(const struct uav_sandbox *s) {
   }
 
   kernel_size = data_size - setup_size;
-  if (KERNEL_LOAD_ADDR + kernel_size > s->data.kvm.guestmem_size) {
+
+  if ((uint64_t)KERNEL_LOAD_ADDR + kernel_size > s->data.kvm.guestmem_size) {
     errno = EFBIG;
     goto out;
   }
 
-  memcpy((uint8_t *)s->data.kvm.guestmem + KERNEL_LOAD_ADDR, (uint8_t *)data + setup_size, data_size - setup_size);
+  memcpy((uint8_t *)s->data.kvm.guestmem + KERNEL_LOAD_ADDR,      (uint8_t *)data + setup_size, kernel_size);
+
+  uint64_t runtime_start = KERNEL_LOAD_ADDR;
+
+  if (boot->hdr.relocatable_kernel) {
+    if (runtime_start < boot->hdr.pref_address)
+      runtime_start = boot->hdr.pref_address;
+
+    if (boot->hdr.kernel_alignment)
+      runtime_start = (runtime_start + boot->hdr.kernel_alignment - 1) &
+        ~((uint64_t)boot->hdr.kernel_alignment - 1);
+  } else if (boot->hdr.pref_address) {
+    runtime_start = boot->hdr.pref_address;
+  }
+
+  if (boot->hdr.init_size)
+    kernel_end = runtime_start + boot->hdr.init_size;
+  else
+    kernel_end = runtime_start + kernel_size;
+
+  if (kernel_end > s->data.kvm.guestmem_size) {
+    errno = ENOMEM;
+    goto out;
+  }
 
   munmap(data, data_size);
   data = MAP_FAILED;
   data_size = 0;
 
-  strcpy((char *)s->data.kvm.guestmem + CMDLINE_START, "console=ttyS0 acpi=off pci=off");
+  /* Command line. */
+  {
+    const char *cmdline = "console=ttyS0 acpi=off pci=off";
+    size_t cmdline_len = strlen(cmdline) + 1;
+
+    if (boot->hdr.cmdline_size != 0 && cmdline_len > boot->hdr.cmdline_size) {
+      errno = E2BIG;
+      goto out;
+    }
+
+    if ((uint64_t)CMDLINE_START + cmdline_len > s->data.kvm.guestmem_size) {
+      errno = ENOMEM;
+      goto out;
+    }
+
+    memcpy((uint8_t *)s->data.kvm.guestmem + CMDLINE_START,  cmdline, cmdline_len);
+  }
 
   /* Boot parameters. */
+  boot->hdr.code32_start = KERNEL_LOAD_ADDR;
   boot->hdr.type_of_loader = 0xff;
   boot->hdr.cmd_line_ptr = CMDLINE_START;
-  boot->hdr.cmdline_size = 4096;
-  boot->hdr.heap_end_ptr = 0xfe00;
 
   boot->e820_entries = 3;
 
@@ -297,8 +389,8 @@ static int kvm_load_images(const struct uav_sandbox *s) {
   boot->e820_table[0].size = 0x0009fc00;
   boot->e820_table[0].type = 1;
 
-  boot->e820_table[1].addr = 0x000f0000;
-  boot->e820_table[1].size = 0x00010000;
+  boot->e820_table[1].addr = 0x0009fc00;
+  boot->e820_table[1].size = 0x00060400;
   boot->e820_table[1].type = 2;
 
   boot->e820_table[2].addr = 0x00100000;
@@ -311,7 +403,7 @@ static int kvm_load_images(const struct uav_sandbox *s) {
 
   if (fstat(fd, &st) < 0) goto out;
 
-  if (st.st_size <= 0 || (uint64_t)st.st_size > s->data.kvm.guestmem_size) {
+  if (st.st_size <= 0 || (uint64_t)st.st_size > s->data.kvm.guestmem_size || (uint64_t)st.st_size > UINT32_MAX) {
     errno = EFBIG;
     goto out;
   }
@@ -323,20 +415,53 @@ static int kvm_load_images(const struct uav_sandbox *s) {
   close(fd);
   fd = -1;
 
-  initrd_addr = (s->data.kvm.guestmem_size - data_size) & ~(INITRD_ALIGN - 1);
+  initrd_top = s->data.kvm.guestmem_size;
 
-  /*
-   * Keep the initrd above the loaded kernel.
-   */
-  if (initrd_addr < KERNEL_LOAD_ADDR + (data_size - setup_size)) {
+  if (boot->hdr.initrd_addr_max != 0 && initrd_top > (uint64_t)boot->hdr.initrd_addr_max + 1)
+    initrd_top = (uint64_t)boot->hdr.initrd_addr_max + 1;
+
+  if (initrd_top > 0x100000000ULL)
+    initrd_top = 0x100000000ULL;
+
+  if (data_size > initrd_top) {
     errno = ENOMEM;
     goto out;
   }
 
-  memcpy((uint8_t *)s->data.kvm.guestmem + initrd_addr, data, data_size);
+  initrd_addr64 = (initrd_top - data_size) & ~((uint64_t)INITRD_ALIGN - 1);
+
+  if (initrd_addr64 < kernel_end) {
+    errno = ENOMEM;
+    goto out;
+  }
+
+  if (initrd_addr64 + data_size > s->data.kvm.guestmem_size) {
+    errno = ENOMEM;
+    goto out;
+  }
+
+  if (initrd_addr64 > UINT32_MAX) {
+    errno = EOVERFLOW;
+    goto out;
+  }
+
+  initrd_addr = (uint32_t)initrd_addr64;
+
+  memcpy((uint8_t *)s->data.kvm.guestmem + initrd_addr,
+         data,
+         data_size);
 
   boot->hdr.ramdisk_image = initrd_addr;
-  boot->hdr.ramdisk_size = data_size;
+  boot->hdr.ramdisk_size = (uint32_t)data_size;
+
+
+  fprintf(stderr,
+      "load=%llx pref=%llx runtime=%llx init_size=%x initrd=%x\n",
+      (unsigned long long)KERNEL_LOAD_ADDR,
+      (unsigned long long)boot->hdr.pref_address,
+      (unsigned long long)runtime_start,
+      boot->hdr.init_size,
+      initrd_addr);
 
   ret = 0;
 
@@ -348,7 +473,6 @@ out:
 
   errno = saved_errno;
   return ret;
-
 }
 
 static int kvm_setup_guest_vcpu(int kvmfd, struct uav_sandbox *s) {
@@ -397,21 +521,23 @@ static int kvm_setup_guest_vcpu(int kvmfd, struct uav_sandbox *s) {
   /* Setup GDT. */
   gdt = (uint64_t *)((uint8_t *)s->data.kvm.guestmem + GDT_START);
 
-  gdt[0] = 0x0000000000000000ULL; /* Null descriptor */
-  gdt[1] = 0x00cf9a000000ffffULL; /* 32-bit kernel code */
-  gdt[2] = 0x00cf92000000ffffULL; /* 32-bit kernel data */
+  gdt[0] = 0x0000000000000000ULL; /* 0x00 null */
+  gdt[1] = 0x0000000000000000ULL; /* 0x08 unused */
+  gdt[2] = 0x00cf9a000000ffffULL; /* 0x10 code */
+  gdt[3] = 0x00cf92000000ffffULL; /* 0x18 data */
+
 
   /* Setup vCPU special registers. */
   ret = ioctl(s->data.kvm.vcpufd, KVM_GET_SREGS, &sregs);
   if (ret < 0) goto out;
 
   sregs.gdt.base = GDT_START;
-  sregs.gdt.limit = 3 * 8 - 1;
+  sregs.gdt.limit = 4 * 8 - 1;
 
-  /* Code segment (selector 0x08). */
+  /* Code segment (selector 0x10). */
   sregs.cs.base = 0;
   sregs.cs.limit = 0xffffffff;
-  sregs.cs.selector = 0x08;
+  sregs.cs.selector = 0x10;
   sregs.cs.type = 0x0b;
   sregs.cs.present = 1;
   sregs.cs.dpl = 0;
@@ -421,10 +547,10 @@ static int kvm_setup_guest_vcpu(int kvmfd, struct uav_sandbox *s) {
   sregs.cs.g = 1;
   sregs.cs.avl = 0;
 
-  /* Data segments (selector 0x10). */
+  /* Data segments (selector 0x18). */
   sregs.ds.base = 0;
   sregs.ds.limit = 0xffffffff;
-  sregs.ds.selector = 0x10;
+  sregs.ds.selector = 0x18;
   sregs.ds.type = 0x03;
   sregs.ds.present = 1;
   sregs.ds.dpl = 0;
