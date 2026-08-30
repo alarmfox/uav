@@ -5,26 +5,34 @@
 #include <stddef.h>
 
 enum uav_sandbox_backend {
-  UAV_BACKEND_NS = 0,
-  UAV_BACKEND_KVM,
+  UAV_SANDBOX_BACKEND_NS = 0,
+  UAV_SANDBOX_BACKEND_KVM,
 };
 
 struct uav_sandbox {
   /* Backend used to execute the sandbox */
   enum uav_sandbox_backend backend;
 
-  /* Path to the root overlayfs */
-  char path[PATH_MAX];
-
-  /* Sandbox config data */
+  /* Sandbox data */
   union {
-    unsigned char *stack;
     struct {
+      /* Base of the stack */
+      unsigned char *stack;
+      /* Path to the sandbox root */
+      char path[PATH_MAX];
+    } ns;
+    struct {
+      /* Guest file descriptor */
       int guestfd;
+      /* vCPU file descriptor */
       int vcpufd;
+      /* Pointer to guest memory */
       void *guestmem;
+      /* Guest memory size */
       size_t guestmem_size;
+      /* Path to kernel */
       const char *kernel_path;
+      /* Path to initramfs */
       const char *initramfs_path;
     } kvm;
   } data;

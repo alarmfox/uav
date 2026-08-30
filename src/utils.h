@@ -26,7 +26,6 @@ static inline int mkdir_if_missing(const char *path, mode_t mode) {
   return -1;
 }
 
-
 int rmtree(const char *path);
 char *uav_path_join(const char *p1, const char *p2);
 int write_file(const char *path, const char *data, size_t len);

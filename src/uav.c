@@ -28,7 +28,7 @@ static int cmd_sandbox_run(int argc, const char *argv[]) {
 
   struct uav_sandbox s;
 
-  ret = uav_sandbox_create(&s, UAV_BACKEND_KVM);
+  ret = uav_sandbox_create(&s, UAV_SANDBOX_BACKEND_NS);
 
   if (ret != 0) {
     fprintf(stderr, "[UAV] cannot create sandbox: %s\n", strerror(errno));

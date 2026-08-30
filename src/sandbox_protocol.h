@@ -1,22 +1,32 @@
 #ifndef UAV_SANDBOX_PROTOCOL_H
 #define UAV_SANDBOX_PROTOCOL_H
 
+#include <stdint.h>
+
+#define UAV_SANDBOX_PROTO_MAGIC   0x55415653u /* "UAVS" */
+#define UAV_SANDBOX_PROTO_VERSION 1
+#define UAV_SANDBOX_PROTO_MAX_PAYLOAD (64 * 1024)
+
 enum uav_sandbox_msg_type {
-  MSG_INVALID = 0,
-  MSG_CHILD_READY,          /* Child: initial setup done, ready for parent */
-  MSG_PARENT_GO,            /* Parent: continue with next phase */
-  MSG_PARENT_MAPPINGS_DONE, /* Parent: user mappings configured */
-  MSG_CHILD_ERROR,          /* Child: error occurred */
-  MSG_PARENT_ERROR,         /* Parent: error occurred */
+  UAV_SANDBOX_MSG_HELLO = 1,
+  UAV_SANDBOX_MSG_CONFIG_DONE,
+  UAV_SANDBOX_MSG_READY,
+  UAV_SANDBOX_MSG_RUN,
+  UAV_SANDBOX_MSG_KILL,
+  UAV_SANDBOX_MSG_EXIT,
+  UAV_SANDBOX_MSG_ERROR
 };
 
-struct uav_sandbox_msg {
-  enum uav_sandbox_msg_type type;
-  /* Optional data (e.g., error code, fd) */
-  int data;
+struct uav_sandbox_proto_msg {
+  uint32_t magic;
+  uint16_t version;
+  uint16_t type;
+  uint32_t length;
+
+  uint8_t payload[UAV_SANDBOX_PROTO_MAX_PAYLOAD];
 };
 
-int uav_sandbox_send_msg(int sockfd, enum uav_sandbox_msg_type type, int data);
-int uav_sandbox_recv_msg(int sockfd, struct uav_sandbox_msg *msg);
+int uav_sandbox_proto_send(int fd, uint16_t type, const void *data, uint32_t length);
+int uav_sandbox_proto_recv(int fd, struct uav_sandbox_proto_msg *h);
 
 #endif //! UAV_SANDBOX_PROTOCOL_H

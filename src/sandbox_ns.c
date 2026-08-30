@@ -45,8 +45,6 @@ static int sandbox_entrypoint(void *ptr);
 struct uav_sandbox_entrypoint_args {
   /* Pointer to configured uav_sandbox */
   const struct uav_sandbox *s;
-  /* Path of the program to execute host-side */
-  const char *program;
   /*  Control socket file descriptor */
   int control_fd;
 };
@@ -55,18 +53,18 @@ int uav_sandbox_ns_create(struct uav_sandbox *s) {
   int ret = 0;
 
   /* Safe because there is _Static_assert in config.h */
-  strcpy(s->path, UAV_SANDBOX_DIR "/uav_sandbox_XXXXXX");
+  strcpy(s->data.ns.path, UAV_SANDBOX_DIR "/uav_sandbox_XXXXXX");
 
-  if(mkdtemp(s->path) == NULL) return 1;
+  if(mkdtemp(s->data.ns.path) == NULL) return 1;
 
-  s->data.stack = uav_malloc(UAV_SANDBOX_NS_STACK_SIZE);
+  s->data.ns.stack = uav_malloc(UAV_SANDBOX_NS_STACK_SIZE);
 
   /* Prepare overlay fs */
   char *paths[4] = { NULL };
   for (size_t i = 0; i < 4; ++i) {
-    paths[i] = uav_path_join(s->path, subdirs[i]);
+    paths[i] = uav_path_join(s->data.ns.path, subdirs[i]);
     if(!paths[i]) {
-      fprintf(stderr, "[UAV] cannot join paths (%s, %s)\n", s->path, subdirs[i]);
+      fprintf(stderr, "[UAV] cannot join paths (%s, %s)\n", s->data.ns.path, subdirs[i]);
       ret = 1;
       goto cleanup;
     }
@@ -96,7 +94,7 @@ int uav_sandbox_ns_run(const struct uav_sandbox *s, const char *program) {
   int control_fd[2] = {-1, -1}, ret = 0;
   uid_t uid;
   gid_t gid;
-  struct uav_sandbox_msg msg;
+  struct uav_sandbox_proto_msg msg;
   int wstatus;
 
   ret = socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, control_fd);
@@ -108,10 +106,9 @@ int uav_sandbox_ns_run(const struct uav_sandbox *s, const char *program) {
   struct uav_sandbox_entrypoint_args *args = uav_malloc(sizeof(struct uav_sandbox_entrypoint_args));
 
   args->s = s;
-  args->program = program;
   args->control_fd = control_fd[1];
 
-  child = clone(sandbox_entrypoint, (char*)s->data.stack + UAV_SANDBOX_NS_STACK_SIZE,
+  child = clone(sandbox_entrypoint, (char*)s->data.ns.stack + UAV_SANDBOX_NS_STACK_SIZE,
       CLONE_NEWUSER |
       CLONE_NEWPID |
       CLONE_NEWNS |
@@ -135,27 +132,27 @@ int uav_sandbox_ns_run(const struct uav_sandbox *s, const char *program) {
   /* UID-GID Mapping */
   ret = uav_get_realuid(&uid, &gid);
   if (ret) {
-    uav_sandbox_send_msg(control_fd[0], MSG_PARENT_ERROR, errno);
+    uav_sandbox_proto_send(control_fd[0], UAV_SANDBOX_MSG_EXIT, 0, 0);
     goto cleanup;
   }
 
   ret = uav_setup_userns_mappings(child, uid, gid);
   if (ret) {
-    uav_sandbox_send_msg(control_fd[0], MSG_PARENT_ERROR, errno);
+    uav_sandbox_proto_send(control_fd[0], UAV_SANDBOX_MSG_EXIT, 0, 0);
     goto cleanup;
   }
 
-  ret = uav_sandbox_send_msg(control_fd[0], MSG_PARENT_MAPPINGS_DONE, 0);
+  ret = uav_sandbox_proto_send(control_fd[0], UAV_SANDBOX_MSG_CONFIG_DONE, 0, 0);
   if (ret < 0) goto cleanup;
 
   /* Sync with child setup */
-  ret = uav_sandbox_recv_msg(control_fd[0], &msg);
-  if (ret < 0 || msg.type == MSG_CHILD_ERROR) {
+  ret = uav_sandbox_proto_recv(control_fd[0], &msg);
+  if (ret < 0 || msg.type == UAV_SANDBOX_MSG_ERROR) {
     fprintf(stderr, "[UAV] child setup failed\n");
     goto cleanup;
   }
 
-  ret = uav_sandbox_send_msg(control_fd[0], MSG_PARENT_GO, 0);
+  ret = uav_sandbox_proto_send(control_fd[0], UAV_SANDBOX_MSG_RUN, program, strlen(program));
   if (ret < 0) goto cleanup;
 
   waitpid(child, &wstatus, 0);
@@ -174,20 +171,20 @@ cleanup:
 
 void uav_sandbox_ns_destroy(struct uav_sandbox *s) {
   int ret;
-  char *p = uav_path_join(s->path, "/merged");
+  char *p = uav_path_join(s->data.ns.path, "/merged");
 
   if (s == NULL) return;
-  if (s->data.stack != NULL) {
-    free(s->data.stack);
-    s->data.stack = NULL;
+  if (s->data.ns.stack != NULL) {
+    free(s->data.ns.stack);
+    s->data.ns.stack = NULL;
   }
 
   free(p);
   p = NULL;
 
-  ret = rmtree(s->path);
+  ret = rmtree(s->data.ns.path);
   if (ret) {
-    fprintf(stderr, "[SANDBOX] cannot remove tree %s: %s\n", s->path, strerror(errno));
+    fprintf(stderr, "[SANDBOX] cannot remove tree %s: %s\n", s->data.ns.path, strerror(errno));
   }
 }
 
@@ -396,7 +393,7 @@ static int uav_sandbox_setup_overlay(const struct uav_sandbox *s) {
   int n;
 
   for (size_t i = 0; i < 4; ++i) {
-    paths[i] = uav_path_join(s->path, subdirs[i]);
+    paths[i] = uav_path_join(s->data.ns.path, subdirs[i]);
   }
 
   n = snprintf(opts, sizeof(opts), "lowerdir=%s,upperdir=%s,workdir=%s",
@@ -450,7 +447,7 @@ static int uav_sandbox_prepare_runtime(const struct uav_sandbox *s) {
   char *pts_path = NULL;
   int ret = -1;
 
-  newroot = uav_path_join(s->path, "/merged");
+  newroot = uav_path_join(s->data.ns.path, "/merged");
 
   ret = sandbox_mount_at_root(newroot, "/proc", 0555, "proc", "proc", MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL);
   if (ret < 0) goto out;
@@ -497,7 +494,7 @@ static int uav_sandbox_pivot_root(const struct uav_sandbox *s) {
   char *oldroot = NULL;
   int ret = -1;
 
-  newroot = uav_path_join(s->path, "/merged");
+  newroot = uav_path_join(s->data.ns.path, "/merged");
   oldroot = uav_path_join(newroot, "/oldroot");
 
   ret = mkdir_if_missing(oldroot,0700);
@@ -525,7 +522,7 @@ out:
 static int uav_sandbox_copyfile(const struct uav_sandbox *s, const char *src, const char *dst) {
 
   int ret = -1;
-  char *newroot= uav_path_join(s->path, "/merged");
+  char *newroot= uav_path_join(s->data.ns.path, "/merged");
   char *dstpath = uav_path_join(newroot, dst);
   struct stat statbuf;
 
@@ -570,13 +567,14 @@ static int uav_sandbox_exec_entrypoint(const char *program) {
 
 static int sandbox_entrypoint(void *ptr) {
   struct uav_sandbox_entrypoint_args *args = ptr;
-  struct uav_sandbox_msg msg;
+  struct uav_sandbox_proto_msg msg;
   const char *err_msg = NULL;
+  const char *program = NULL;
   int ret;
 
   /* Wait for parent mapping */
-  ret = uav_sandbox_recv_msg(args->control_fd, &msg);
-  if (ret < 0 || msg.type != MSG_PARENT_MAPPINGS_DONE) {
+  ret = uav_sandbox_proto_recv(args->control_fd, &msg);
+  if (ret < 0 || msg.type != UAV_SANDBOX_MSG_CONFIG_DONE) {
     err_msg = "recv_msg: mappings not done";
     goto fail;
   }
@@ -606,19 +604,20 @@ static int sandbox_entrypoint(void *ptr) {
   }
 
   /* Signal we are ready */
-  ret = uav_sandbox_send_msg(args->control_fd, MSG_CHILD_READY, 0);
+  ret = uav_sandbox_proto_send(args->control_fd, UAV_SANDBOX_MSG_READY,0,  0);
   if (ret < 0) {
     err_msg = "send_msg: READY";
     goto fail;
   }
 
-  ret = uav_sandbox_recv_msg(args->control_fd, &msg);
-  if (ret < 0 || msg.type != MSG_PARENT_GO) {
+  ret = uav_sandbox_proto_recv(args->control_fd, &msg);
+  if (ret < 0 || msg.type != UAV_SANDBOX_MSG_RUN) {
     err_msg = "recv_msg: GO";
     goto fail;
   }
+  program = (char *) msg.payload;
 
-  ret = uav_sandbox_copyfile(args->s, args->program, basename(args->program));
+  ret = uav_sandbox_copyfile(args->s, program, basename(program));
   if (ret < 0) {
     err_msg = "copyfile";
     goto fail;
@@ -630,7 +629,7 @@ static int sandbox_entrypoint(void *ptr) {
     goto fail;
   }
 
-  char *path = uav_path_join("/", basename(args->program));
+  char *path = uav_path_join("/", basename(program));
   ret = uav_sandbox_exec_entrypoint(path);
   err_msg = "exec entrypoint";
 
@@ -639,7 +638,7 @@ fail:
     int saved_errno = errno;
 
     fprintf(stderr,  "[UAV] sandbox failure at %s: %s\n", err_msg ? err_msg : "unknown", strerror(saved_errno));
-    uav_sandbox_send_msg(args->control_fd, MSG_CHILD_ERROR,  saved_errno);
+    uav_sandbox_proto_send(args->control_fd, UAV_SANDBOX_MSG_ERROR, &saved_errno, sizeof(saved_errno));
     _exit(1);
   }
 }
