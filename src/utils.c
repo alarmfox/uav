@@ -1,12 +1,13 @@
+#include "utils.h"
+
 #include <fcntl.h>
 #include <ftw.h>
 #include <linux/limits.h>
 #include <string.h>
 #include <unistd.h>
 
-#include "utils.h"
-
-static int unlink_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf) {
+static int unlink_cb(const char* fpath, const struct stat* sb, int typeflag,
+                     struct FTW* ftwbuf) {
   (void)sb;
   (void)typeflag;
   (void)ftwbuf;
@@ -19,7 +20,7 @@ static int unlink_cb(const char *fpath, const struct stat *sb, int typeflag, str
 }
 
 /* Delete a directory recursively */
-int rmtree(const char *path) {
+int rmtree(const char* path) {
   return nftw(path, unlink_cb, 64, FTW_DEPTH | FTW_PHYS);
 }
 
@@ -29,7 +30,7 @@ int rmtree(const char *path) {
  * "/tmp"  + "/work"  -> "/tmp/work"
  * "/tmp/" + "/work"  -> "/tmp/work"
  */
-char *uav_path_join(const char *p1, const char *p2) {
+char* uav_path_join(const char* p1, const char* p2) {
   if (p1 == NULL || p2 == NULL) {
     errno = EINVAL;
     return NULL;
@@ -55,7 +56,7 @@ char *uav_path_join(const char *p1, const char *p2) {
 
   size_t len = l1 + l2 + add_slash - skip;
 
-  char *r = (char *)uav_malloc(len + 1);
+  char* r = (char*)uav_malloc(len + 1);
   memcpy(r, p1, l1);
 
   size_t pos = l1;
@@ -69,13 +70,13 @@ char *uav_path_join(const char *p1, const char *p2) {
   return r;
 }
 
-int copyfile(const char *src, const char *dst) {
+int copyfile(const char* src, const char* dst) {
   static const char temp_name[] = ".uav-copy-XXXXXX";
   int srcfd = -1, dstfd = -1;
   unsigned char buf[8192];
   struct stat src_stat;
-  char *temp_path = NULL;
-  const char *slash;
+  char* temp_path = NULL;
+  const char* slash;
   size_t dst_len;
   size_t dir_len;
   int renamed = 0;
@@ -99,8 +100,7 @@ int copyfile(const char *src, const char *dst) {
     goto cleanup;
   }
 
-  if (fstat(srcfd, &src_stat) < 0)
-    goto cleanup;
+  if (fstat(srcfd, &src_stat) < 0) goto cleanup;
 
   if (!S_ISREG(src_stat.st_mode)) {
     errno = EINVAL;
@@ -125,7 +125,8 @@ int copyfile(const char *src, const char *dst) {
 
   dstfd = mkostemp(temp_path, O_CLOEXEC);
   if (dstfd < 0) {
-    fprintf(stderr, "[UAV] cannot create temporary destination for %s: %s\n", dst, strerror(errno));
+    fprintf(stderr, "[UAV] cannot create temporary destination for %s: %s\n",
+            dst, strerror(errno));
     goto cleanup;
   }
 
@@ -141,8 +142,7 @@ int copyfile(const char *src, const char *dst) {
       goto cleanup;
     }
 
-    if (nread == 0)
-      break;
+    if (nread == 0) break;
 
     ssize_t written = 0;
 
@@ -168,8 +168,7 @@ int copyfile(const char *src, const char *dst) {
     }
   }
 
-  if (fchmod(dstfd, src_stat.st_mode & 0777) < 0)
-    goto cleanup;
+  if (fchmod(dstfd, src_stat.st_mode & 0777) < 0) goto cleanup;
 
   /* Surface delayed write errors before publishing the completed file. */
   if (close(dstfd) < 0) {
@@ -179,7 +178,8 @@ int copyfile(const char *src, const char *dst) {
   dstfd = -1;
 
   if (rename(temp_path, dst) < 0) {
-    fprintf(stderr, "[UAV] cannot publish destination %s: %s\n", dst, strerror(errno));
+    fprintf(stderr, "[UAV] cannot publish destination %s: %s\n", dst,
+            strerror(errno));
     goto cleanup;
   }
 
@@ -189,14 +189,11 @@ int copyfile(const char *src, const char *dst) {
 cleanup:
   saved_errno = errno;
 
-  if (srcfd >= 0)
-    close(srcfd);
+  if (srcfd >= 0) close(srcfd);
 
-  if (dstfd >= 0)
-    close(dstfd);
+  if (dstfd >= 0) close(dstfd);
 
-  if (temp_path != NULL && !renamed)
-    unlink(temp_path);
+  if (temp_path != NULL && !renamed) unlink(temp_path);
 
   free(temp_path);
   errno = saved_errno;
@@ -204,15 +201,14 @@ cleanup:
   return ret;
 }
 
-int uav_write_all(int fd, const void *buf, size_t len) {
-  const unsigned char *p = buf;
+int uav_write_all(int fd, const void* buf, size_t len) {
+  const unsigned char* p = buf;
 
   while (len > 0) {
     ssize_t n = write(fd, p, len);
 
     if (n < 0) {
-      if (errno == EINTR)
-        continue;
+      if (errno == EINTR) continue;
 
       return -1;
     }
@@ -229,15 +225,14 @@ int uav_write_all(int fd, const void *buf, size_t len) {
   return 0;
 }
 
-int uav_read_all(int fd, void *buf, size_t len) {
-  unsigned char *p = buf;
+int uav_read_all(int fd, void* buf, size_t len) {
+  unsigned char* p = buf;
 
   while (len > 0) {
     ssize_t n = read(fd, p, len);
 
     if (n < 0) {
-      if (errno == EINTR)
-        continue;
+      if (errno == EINTR) continue;
 
       return -1;
     }

@@ -19,7 +19,7 @@
 #include "sandbox_protocol.h"
 #include "utils.h"
 
-#define UAV_AGENT_DIR              "/run/uav"
+#define UAV_AGENT_DIR "/run/uav"
 #define UAV_AGENT_PROGRAM_TEMPLATE UAV_AGENT_DIR "/uav_program_XXXXXX"
 
 struct uav_agent_state {
@@ -30,20 +30,20 @@ struct uav_agent_state {
 };
 
 static struct uav_agent_state agent = {
-  .control_fd = -1,
-  .program_pid = -1,
-  .program_ready = false,
-  .program_path = { 0 },
+    .control_fd = -1,
+    .program_pid = -1,
+    .program_ready = false,
+    .program_path = {0},
 };
 
 static void print_help(void);
-static int uav_agent_parse_options(int argc, char *const argv[]);
+static int uav_agent_parse_options(int argc, char* const argv[]);
 static int uav_agent_setup(void);
 static void uav_agent_cleanup(void);
 static int uav_agent_loop(void);
-static int uav_agent_dispatch(const struct uav_sandbox_proto_msg *msg);
-static int uav_agent_upload(const struct uav_sandbox_proto_msg *begin);
-static int uav_agent_run(const struct uav_sandbox_proto_msg *msg);
+static int uav_agent_dispatch(const struct uav_sandbox_proto_msg* msg);
+static int uav_agent_upload(const struct uav_sandbox_proto_msg* begin);
+static int uav_agent_run(const struct uav_sandbox_proto_msg* msg);
 static int uav_agent_kill(void);
 static int uav_agent_check_program(void);
 static int uav_agent_send_error(int error);
@@ -55,13 +55,12 @@ static void print_help(void) {
   printf("  -h, --help              Show this help message\n");
 }
 
-static int uav_agent_parse_options(int argc, char *const argv[]) {
+static int uav_agent_parse_options(int argc, char* const argv[]) {
   static const struct option long_options[] = {
-    { "control-fd", required_argument, NULL, 'f' },
-    { "help",       no_argument,       NULL, 'h' },
-    { NULL,           0,                 NULL,  0  }
-  };
-  char *end;
+      {"control-fd", required_argument, NULL, 'f'},
+      {"help", no_argument, NULL, 'h'},
+      {NULL, 0, NULL, 0}};
+  char* end;
   long value;
   int opt;
 
@@ -101,29 +100,24 @@ static int uav_agent_setup(void) {
   struct termios termios;
   int flags;
 
-  if (signal(SIGPIPE, SIG_IGN) == SIG_ERR)
-    return -1;
+  if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) return -1;
 
   flags = fcntl(agent.control_fd, F_GETFD);
-  if (flags < 0)
-    return -1;
+  if (flags < 0) return -1;
 
-  if (fcntl(agent.control_fd, F_SETFD, flags | FD_CLOEXEC) < 0)
-    return -1;
+  if (fcntl(agent.control_fd, F_SETFD, flags | FD_CLOEXEC) < 0) return -1;
 
   if (isatty(agent.control_fd)) {
-    if (tcgetattr(agent.control_fd, &termios) < 0)
-      return -1;
+    if (tcgetattr(agent.control_fd, &termios) < 0) return -1;
     cfmakeraw(&termios);
-    if (tcsetattr(agent.control_fd, TCSANOW, &termios) < 0)
-      return -1;
+    if (tcsetattr(agent.control_fd, TCSANOW, &termios) < 0) return -1;
   }
 
-  if (mkdir(UAV_AGENT_DIR, 0700) < 0 && errno != EEXIST)
-    return -1;
+  if (mkdir(UAV_AGENT_DIR, 0700) < 0 && errno != EEXIST) return -1;
 
   /* Setup is complete. The host may start sending commands. */
-  return uav_sandbox_proto_send(  agent.control_fd, UAV_SANDBOX_MSG_READY, NULL, 0);
+  return uav_sandbox_proto_send(agent.control_fd, UAV_SANDBOX_MSG_READY, NULL,
+                                0);
 }
 
 static void uav_agent_cleanup(void) {
@@ -151,15 +145,15 @@ static void uav_agent_cleanup(void) {
 static int uav_agent_send_error(int error) {
   uint32_t payload = htonl((uint32_t)error);
 
-  if (agent.control_fd < 0)
-    return -1;
+  if (agent.control_fd < 0) return -1;
 
-  return uav_sandbox_proto_send(agent.control_fd, UAV_SANDBOX_MSG_ERROR,&payload, sizeof(payload));
+  return uav_sandbox_proto_send(agent.control_fd, UAV_SANDBOX_MSG_ERROR,
+                                &payload, sizeof(payload));
 }
 
-static int uav_agent_upload(const struct uav_sandbox_proto_msg *begin) {
+static int uav_agent_upload(const struct uav_sandbox_proto_msg* begin) {
   char path[] = UAV_AGENT_PROGRAM_TEMPLATE;
-  uint8_t *data = NULL;
+  uint8_t* data = NULL;
   size_t size = 0;
   int fd = -1;
   int flags;
@@ -173,22 +167,18 @@ static int uav_agent_upload(const struct uav_sandbox_proto_msg *begin) {
 
   /* mkstemp gives every uploaded file a private, unpredictable pathname. */
   fd = mkstemp(path);
-  if (fd < 0)
-    goto out;
+  if (fd < 0) goto out;
 
   flags = fcntl(fd, F_GETFD);
-  if (flags < 0 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0)
+  if (flags < 0 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0) goto out;
+
+  if (uav_sandbox_proto_download(agent.control_fd, begin, path, &data, &size) <
+      0)
     goto out;
 
-  if (uav_sandbox_proto_download(agent.control_fd, begin,
-          path, &data, &size) < 0)
-    goto out;
+  if (uav_write_all(fd, data, size) < 0) goto out;
 
-  if (uav_write_all(fd, data, size) < 0)
-    goto out;
-
-  if (fchmod(fd, 0700) < 0)
-    goto out;
+  if (fchmod(fd, 0700) < 0) goto out;
 
   if (close(fd) < 0) {
     fd = -1;
@@ -196,8 +186,7 @@ static int uav_agent_upload(const struct uav_sandbox_proto_msg *begin) {
   }
   fd = -1;
 
-  if (agent.program_ready)
-    unlink(agent.program_path);
+  if (agent.program_ready) unlink(agent.program_path);
 
   strcpy(agent.program_path, path);
   agent.program_ready = true;
@@ -205,16 +194,14 @@ static int uav_agent_upload(const struct uav_sandbox_proto_msg *begin) {
 
 out:
   saved_errno = errno;
-  if (fd >= 0)
-    close(fd);
-  if (ret < 0)
-    unlink(path);
+  if (fd >= 0) close(fd);
+  if (ret < 0) unlink(path);
   free(data);
   errno = saved_errno;
   return ret;
 }
 
-static int uav_agent_run(const struct uav_sandbox_proto_msg *msg) {
+static int uav_agent_run(const struct uav_sandbox_proto_msg* msg) {
   size_t path_size;
   pid_t pid;
 
@@ -236,12 +223,11 @@ static int uav_agent_run(const struct uav_sandbox_proto_msg *msg) {
   }
 
   pid = fork();
-  if (pid < 0)
-    return -1;
+  if (pid < 0) return -1;
 
   if (pid == 0) {
-    char *const argv[] = { agent.program_path, NULL };
-    char *const envp[] = { NULL };
+    char* const argv[] = {agent.program_path, NULL};
+    char* const envp[] = {NULL};
 
     /* The analyzed program must not inherit the agent's control channel. */
     close(agent.control_fd);
@@ -260,8 +246,7 @@ static int uav_agent_kill(void) {
     return -1;
   }
 
-  if (kill(agent.program_pid, SIGKILL) < 0 && errno != ESRCH)
-    return -1;
+  if (kill(agent.program_pid, SIGKILL) < 0 && errno != ESRCH) return -1;
 
   return 0;
 }
@@ -271,26 +256,23 @@ static int uav_agent_check_program(void) {
   pid_t pid;
   int status;
 
-  if (agent.program_pid <= 0)
-    return 0;
+  if (agent.program_pid <= 0) return 0;
 
   do {
     pid = waitpid(agent.program_pid, &status, WNOHANG);
   } while (pid < 0 && errno == EINTR);
 
-  if (pid == 0)
-    return 0;
-  if (pid < 0)
-    return -1;
+  if (pid == 0) return 0;
+  if (pid < 0) return -1;
 
   agent.program_pid = -1;
   payload = htonl((uint32_t)status);
 
   return uav_sandbox_proto_send(agent.control_fd, UAV_SANDBOX_MSG_EXIT,
-      &payload, sizeof(payload));
+                                &payload, sizeof(payload));
 }
 
-static int uav_agent_dispatch(const struct uav_sandbox_proto_msg *msg) {
+static int uav_agent_dispatch(const struct uav_sandbox_proto_msg* msg) {
   switch (msg->type) {
     case UAV_SANDBOX_MSG_UPLOAD_BEGIN:
       return uav_agent_upload(msg);
@@ -319,14 +301,13 @@ static int uav_agent_dispatch(const struct uav_sandbox_proto_msg *msg) {
 }
 
 static int uav_agent_loop(void) {
-  struct pollfd fd = { .fd = agent.control_fd, .events = POLLIN };
+  struct pollfd fd = {.fd = agent.control_fd, .events = POLLIN};
   struct uav_sandbox_proto_msg msg;
   int timeout;
   int ret;
 
   for (;;) {
-    if (uav_agent_check_program() < 0)
-      return -1;
+    if (uav_agent_check_program() < 0) return -1;
 
     /* Check child exit periodically, but block fully while idle. */
     timeout = agent.program_pid > 0 ? 100 : -1;
@@ -335,20 +316,15 @@ static int uav_agent_loop(void) {
       ret = poll(&fd, 1, timeout);
     } while (ret < 0 && errno == EINTR);
 
-    if (ret < 0)
-      return -1;
-    if (ret == 0)
-      continue;
+    if (ret < 0) return -1;
+    if (ret == 0) continue;
 
     if (fd.revents & POLLIN) {
-      if (uav_sandbox_proto_recv(agent.control_fd, &msg) < 0)
-        return -1;
+      if (uav_sandbox_proto_recv(agent.control_fd, &msg) < 0) return -1;
 
       ret = uav_agent_dispatch(&msg);
-      if (ret < 0)
-        return -1;
-      if (ret > 0)
-        return 0;
+      if (ret < 0) return -1;
+      if (ret > 0) return 0;
     }
 
     if (fd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
@@ -358,7 +334,7 @@ static int uav_agent_loop(void) {
   }
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
   int ret;
 
   ret = uav_agent_parse_options(argc, argv);
@@ -379,7 +355,8 @@ int main(int argc, char *argv[]) {
   if (uav_agent_loop() < 0) {
     int saved_errno = errno;
     uav_agent_send_error(saved_errno);
-    fprintf(stderr, "[UAV-AGENT] protocol loop failed: %s\n", strerror(saved_errno));
+    fprintf(stderr, "[UAV-AGENT] protocol loop failed: %s\n",
+            strerror(saved_errno));
     uav_agent_cleanup();
     return EXIT_FAILURE;
   }

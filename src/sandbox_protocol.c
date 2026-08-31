@@ -1,29 +1,31 @@
+#include "sandbox_protocol.h"
+
 #include <arpa/inet.h>
 #include <errno.h>
 #include <string.h>
 #include <unistd.h>
 
-#include "sandbox_protocol.h"
 #include "utils.h"
 
-int uav_sandbox_proto_send(int fd, uint16_t type, const void *payload, uint32_t length) {
+int uav_sandbox_proto_send(int fd, uint16_t type, const void* payload,
+                           uint32_t length) {
   unsigned char buf[12];
   int ret;
 
-  if(length > UAV_SANDBOX_PROTO_MAX_PAYLOAD) {
+  if (length > UAV_SANDBOX_PROTO_MAX_PAYLOAD) {
     errno = EMSGSIZE;
     return -1;
   }
 
   uint32_t magic = htonl(UAV_SANDBOX_PROTO_MAGIC);
-  uint16_t ver   = htons(UAV_SANDBOX_PROTO_VERSION);
-  uint16_t typ   = htons(type);
-  uint32_t len   = htonl(length);
+  uint16_t ver = htons(UAV_SANDBOX_PROTO_VERSION);
+  uint16_t typ = htons(type);
+  uint32_t len = htonl(length);
 
   memcpy(buf + 0, &magic, sizeof(magic));
-  memcpy(buf + 4, &ver,   sizeof(ver));
-  memcpy(buf + 6, &typ,   sizeof(typ));
-  memcpy(buf + 8, &len,   sizeof(len));
+  memcpy(buf + 4, &ver, sizeof(ver));
+  memcpy(buf + 6, &typ, sizeof(typ));
+  memcpy(buf + 8, &len, sizeof(len));
 
   ret = uav_write_all(fd, buf, sizeof(buf));
   if (ret < 0) return ret;
@@ -35,13 +37,13 @@ int uav_sandbox_proto_send(int fd, uint16_t type, const void *payload, uint32_t 
     }
 
     ret = uav_write_all(fd, payload, length);
-    if(ret < 0) return ret;
+    if (ret < 0) return ret;
   }
 
   return 0;
 }
 
-int uav_sandbox_proto_recv(int fd, struct uav_sandbox_proto_msg *msg) {
+int uav_sandbox_proto_recv(int fd, struct uav_sandbox_proto_msg* msg) {
   unsigned char buf[12];
   int ret;
 
@@ -52,17 +54,17 @@ int uav_sandbox_proto_recv(int fd, struct uav_sandbox_proto_msg *msg) {
 
   ret = uav_read_all(fd, buf, sizeof(buf));
 
-  if(ret < 0) return ret;
+  if (ret < 0) return ret;
 
-  memcpy(&magic,   buf + 0, 4);
+  memcpy(&magic, buf + 0, 4);
   memcpy(&version, buf + 4, 2);
-  memcpy(&type,    buf + 6, 2);
-  memcpy(&length,  buf + 8, 4);
+  memcpy(&type, buf + 6, 2);
+  memcpy(&length, buf + 8, 4);
 
-  msg->magic   = ntohl(magic);
+  msg->magic = ntohl(magic);
   msg->version = ntohs(version);
-  msg->type    = ntohs(type);
-  msg->length  = ntohl(length);
+  msg->type = ntohs(type);
+  msg->length = ntohl(length);
 
   if (msg->magic != UAV_SANDBOX_PROTO_MAGIC) {
     errno = EPROTO;
@@ -79,10 +81,12 @@ int uav_sandbox_proto_recv(int fd, struct uav_sandbox_proto_msg *msg) {
     return -1;
   }
 
-  return msg->length > 0 ? ret = uav_read_all(fd, msg->payload, msg->length) : 0;
+  return msg->length > 0 ? ret = uav_read_all(fd, msg->payload, msg->length)
+                         : 0;
 }
 
-int uav_sandbox_proto_upload(int fd, char *path, size_t path_size, const uint8_t *data, size_t size) {
+int uav_sandbox_proto_upload(int fd, char* path, size_t path_size,
+                             const uint8_t* data, size_t size) {
   int ret = -1;
   size_t off = 0, chunk_size = size - off;
   uint32_t sz;
@@ -94,7 +98,8 @@ int uav_sandbox_proto_upload(int fd, char *path, size_t path_size, const uint8_t
   }
 
   sz = htonl(size);
-  ret = uav_sandbox_proto_send(fd, UAV_SANDBOX_MSG_UPLOAD_BEGIN, &sz, sizeof(uint32_t));
+  ret = uav_sandbox_proto_send(fd, UAV_SANDBOX_MSG_UPLOAD_BEGIN, &sz,
+                               sizeof(uint32_t));
   if (ret < 0) return ret;
 
   ret = uav_sandbox_proto_recv(fd, &msg);
@@ -108,9 +113,11 @@ int uav_sandbox_proto_upload(int fd, char *path, size_t path_size, const uint8_t
 
   while (off < size) {
     chunk_size = size - off;
-    if (chunk_size > UAV_SANDBOX_PROTO_MAX_CHUNK) chunk_size = UAV_SANDBOX_PROTO_MAX_CHUNK;
+    if (chunk_size > UAV_SANDBOX_PROTO_MAX_CHUNK)
+      chunk_size = UAV_SANDBOX_PROTO_MAX_CHUNK;
 
-    ret =  uav_sandbox_proto_send(fd, UAV_SANDBOX_MSG_UPLOAD_CHUNK, data + off, chunk_size);
+    ret = uav_sandbox_proto_send(fd, UAV_SANDBOX_MSG_UPLOAD_CHUNK, data + off,
+                                 chunk_size);
     if (ret < 0) return ret;
 
     off += chunk_size;
@@ -119,13 +126,14 @@ int uav_sandbox_proto_upload(int fd, char *path, size_t path_size, const uint8_t
   return uav_sandbox_proto_send(fd, UAV_SANDBOX_MSG_UPLOAD_END, NULL, 0);
 }
 
-int uav_sandbox_proto_download(int fd, const struct uav_sandbox_proto_msg *begin, const char *path, uint8_t **data, size_t *size) {
-
+int uav_sandbox_proto_download(int fd,
+                               const struct uav_sandbox_proto_msg* begin,
+                               const char* path, uint8_t** data, size_t* size) {
   struct uav_sandbox_proto_msg msg;
   int ret;
   uint32_t sz;
   size_t off = 0;
-  uint8_t *buf = NULL;
+  uint8_t* buf = NULL;
 
   if (begin == NULL || path == NULL || data == NULL || size == NULL) {
     errno = EINVAL;
@@ -138,7 +146,8 @@ int uav_sandbox_proto_download(int fd, const struct uav_sandbox_proto_msg *begin
     return -1;
   }
 
-  ret = uav_sandbox_proto_send(fd, UAV_SANDBOX_MSG_STR, (const uint8_t *) path, strlen(path) + 1);
+  ret = uav_sandbox_proto_send(fd, UAV_SANDBOX_MSG_STR, (const uint8_t*)path,
+                               strlen(path) + 1);
   if (ret < 0) return ret;
 
   memcpy(&sz, begin->payload, sizeof(sz));

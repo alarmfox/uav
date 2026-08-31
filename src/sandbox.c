@@ -1,18 +1,18 @@
+#include "sandbox.h"
+
 #include <errno.h>
 #include <string.h>
 #include <unistd.h>
 
-#include "sandbox.h"
-
 /* Sandbox helpers */
-int uav_sandbox_ns_create(struct uav_sandbox * s);
-int uav_sandbox_ns_run(const struct uav_sandbox * s, const char *program);
-int uav_sandbox_ns_destroy(struct uav_sandbox * s);
-int uav_sandbox_kvm_create(struct uav_sandbox * s);
-int uav_sandbox_kvm_run(const struct uav_sandbox * s, const char *program);
-int uav_sandbox_kvm_destroy(struct uav_sandbox * s);
+int uav_sandbox_ns_create(struct uav_sandbox* s);
+int uav_sandbox_ns_run(const struct uav_sandbox* s, const char* program);
+int uav_sandbox_ns_destroy(struct uav_sandbox* s);
+int uav_sandbox_kvm_create(struct uav_sandbox* s);
+int uav_sandbox_kvm_run(const struct uav_sandbox* s, const char* program);
+int uav_sandbox_kvm_destroy(struct uav_sandbox* s);
 
-int uav_sandbox_create(struct uav_sandbox *s, enum uav_sandbox_backend type) {
+int uav_sandbox_create(struct uav_sandbox* s, enum uav_sandbox_backend type) {
   if (s == NULL) {
     errno = EINVAL;
     return -1;
@@ -35,8 +35,8 @@ int uav_sandbox_create(struct uav_sandbox *s, enum uav_sandbox_backend type) {
   return -1;
 }
 
-int uav_sandbox_run_program(const struct uav_sandbox *s, const char *program) {
-  if(s == NULL || program == NULL) {
+int uav_sandbox_run_program(const struct uav_sandbox* s, const char* program) {
+  if (s == NULL || program == NULL) {
     errno = EINVAL;
     return -1;
   }
@@ -52,8 +52,8 @@ int uav_sandbox_run_program(const struct uav_sandbox *s, const char *program) {
   return -1;
 }
 
-int uav_sandbox_destroy(struct uav_sandbox *s) {
-  if(s == NULL) {
+int uav_sandbox_destroy(struct uav_sandbox* s) {
+  if (s == NULL) {
     errno = EINVAL;
     return -1;
   }

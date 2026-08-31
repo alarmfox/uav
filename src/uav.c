@@ -12,17 +12,19 @@ static void print_sandbox_run_help(void) {
   printf("Usage: uav sandbox run <program> \n\n");
   printf("Run a program in an isolated environment.\n\n");
   printf("Options:\n");
-  printf("  -b, --backend <backend> Isolation technology. 'container' or 'kvm' allowed\n");
+  printf(
+      "  -b, --backend <backend> Isolation technology. 'container' or 'kvm' "
+      "allowed\n");
   printf("  -h, --help              Show this help message\n\n");
   printf("Arguments:\n");
   printf("  program                 Program to execute in sandbox\n");
-  printf("                          If omitted, drops into interactive shell\n\n");
+  printf(
+      "                          If omitted, drops into interactive shell\n\n");
   printf("Examples:\n");
   printf("  uav sandbox run suspicious.sh\n");
 }
 
-static int cmd_sandbox_run(int argc, const char *argv[]) {
-
+static int cmd_sandbox_run(int argc, const char* argv[]) {
   int ret = EXIT_FAILURE;
   int opt;
   struct uav_sandbox s;
@@ -30,18 +32,23 @@ static int cmd_sandbox_run(int argc, const char *argv[]) {
   const char* program = NULL;
 
   static const struct option long_options[] = {
-    { "backend", required_argument, NULL, 'b' },
-    { "help",   no_argument,       NULL, 'h' },
-    { NULL,     0,                 NULL,  0  }
-  };
+      {"backend", required_argument, NULL, 'b'},
+      {"help", no_argument, NULL, 'h'},
+      {NULL, 0, NULL, 0}};
 
-  while ((opt = getopt_long(argc, (char *const *)argv, "b:h", long_options, NULL)) != -1) {
+  while ((opt = getopt_long(argc, (char* const*)argv, "b:h", long_options,
+                            NULL)) != -1) {
     switch (opt) {
       case 'b':
-        if (!strcmp(optarg, "kvm")) backend = UAV_SANDBOX_BACKEND_KVM;
-        else if (!strcmp(optarg, "container")) backend = UAV_SANDBOX_BACKEND_NS;
+        if (!strcmp(optarg, "kvm"))
+          backend = UAV_SANDBOX_BACKEND_KVM;
+        else if (!strcmp(optarg, "container"))
+          backend = UAV_SANDBOX_BACKEND_NS;
         else {
-          fprintf(stderr, "[UAV] invalid sandbox backend %s. Allowed 'kvm' or 'container'.\n", optarg);
+          fprintf(stderr,
+                  "[UAV] invalid sandbox backend %s. Allowed 'kvm' or "
+                  "'container'.\n",
+                  optarg);
           print_sandbox_run_help();
           return EXIT_FAILURE;
         }
@@ -87,7 +94,7 @@ static int cmd_sandbox_run(int argc, const char *argv[]) {
   ret = EXIT_SUCCESS;
 cleanup:
   ret = uav_sandbox_destroy(&s);
-  if(ret < 0) {
+  if (ret < 0) {
     fprintf(stderr, "[UAV] cannot destroy sandbox: %s\n", strerror(errno));
     ret = EXIT_FAILURE;
   }
@@ -104,15 +111,13 @@ static void print_sandbox_help(void) {
   printf("  uav sandbox run suspicious.sh\n");
 }
 
-static int cmd_sandbox(int argc, const char *argv[]) {
-
-  if(argc < 2) {
+static int cmd_sandbox(int argc, const char* argv[]) {
+  if (argc < 2) {
     print_sandbox_help();
     return EXIT_SUCCESS;
   }
 
-  if(strcmp("run", argv[1]) == 0)
-    return cmd_sandbox_run(argc - 1, argv + 1);
+  if (strcmp("run", argv[1]) == 0) return cmd_sandbox_run(argc - 1, argv + 1);
   print_sandbox_help();
 
   return EXIT_FAILURE;
@@ -122,29 +127,30 @@ static int cmd_sandbox(int argc, const char *argv[]) {
 
 /* Command dispatch table */
 struct command {
-  const char *name;
-  int (*func)(int argc, const char *argv[]);
+  const char* name;
+  int (*func)(int argc, const char* argv[]);
   void (*help)(void);
-  const char *brief;
+  const char* brief;
 };
 
 static const struct command commands[] = {
-  {"sandbox", cmd_sandbox, print_sandbox_help, "Execute and controls sandbox"},
-  { NULL, NULL, NULL, NULL }
-};
+    {"sandbox", cmd_sandbox, print_sandbox_help,
+     "Execute and controls sandbox"},
+    {NULL, NULL, NULL, NULL}};
 
-static void print_usage(const char *progname) {
+static void print_usage(const char* progname) {
   printf("Usage: %s <command> [options]\n\n", progname);
   printf("Commands:\n");
 
-  for (const struct command *cmd = commands; cmd->name != NULL; cmd++) {
+  for (const struct command* cmd = commands; cmd->name != NULL; cmd++) {
     printf("  %-12s %s\n", cmd->name, cmd->brief);
   }
 
-  printf("\nUse '%s <command> --help' for command-specific options\n", progname);
+  printf("\nUse '%s <command> --help' for command-specific options\n",
+         progname);
 }
 
-int main(int argc, const char *argv[]) {
+int main(int argc, const char* argv[]) {
   if (argc < 2) {
     print_usage(argv[0]);
     return EXIT_FAILURE;
@@ -157,7 +163,7 @@ int main(int argc, const char *argv[]) {
   }
 
   /* Dispatch to subcommand */
-  for (const struct command *cmd = commands; cmd->name != NULL; cmd++) {
+  for (const struct command* cmd = commands; cmd->name != NULL; cmd++) {
     if (strcmp(argv[1], cmd->name) == 0) {
       return cmd->func(argc - 1, argv + 1);
     }
