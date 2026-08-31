@@ -69,34 +69,6 @@ char *uav_path_join(const char *p1, const char *p2) {
   return r;
 }
 
-int write_file(const char *path, const char *data, size_t len) {
-  int fd, ret = -1, saved_errno;
-  ssize_t written;
-
-  fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-  if (fd < 0) goto cleanup;
-
-  written = write(fd, data, len);
-  if (written < 0) goto cleanup;
-  if ((size_t)written != len) {
-    errno = EIO;
-    goto cleanup;
-  }
-
-  ret = 0;
-
-cleanup:
-  saved_errno = errno;
-  if (fd >= 0)close(fd);
-  errno = saved_errno;
-
-  return ret;
-}
-
-int write_file_str(const char *path, const char *str) {
-  return write_file(path, str, strlen(str));
-}
-
 int copyfile(const char *src, const char *dst) {
   static const char temp_name[] = ".uav-copy-XXXXXX";
   int srcfd = -1, dstfd = -1;
@@ -230,4 +202,54 @@ cleanup:
   errno = saved_errno;
 
   return ret;
+}
+
+int uav_write_all(int fd, const void *buf, size_t len) {
+  const unsigned char *p = buf;
+
+  while (len > 0) {
+    ssize_t n = write(fd, p, len);
+
+    if (n < 0) {
+      if (errno == EINTR)
+        continue;
+
+      return -1;
+    }
+
+    if (n == 0) {
+      errno = EIO;
+      return -1;
+    }
+
+    p += n;
+    len -= (size_t)n;
+  }
+
+  return 0;
+}
+
+int uav_read_all(int fd, void *buf, size_t len) {
+  unsigned char *p = buf;
+
+  while (len > 0) {
+    ssize_t n = read(fd, p, len);
+
+    if (n < 0) {
+      if (errno == EINTR)
+        continue;
+
+      return -1;
+    }
+
+    if (n == 0) {
+      errno = ECONNRESET;
+      return -1;
+    }
+
+    p += n;
+    len -= (size_t)n;
+  }
+
+  return 0;
 }

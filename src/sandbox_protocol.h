@@ -11,17 +11,18 @@
 
 enum uav_sandbox_msg_type {
   UAV_SANDBOX_MSG_HELLO = 1,
-  UAV_SANDBOX_MSG_READY = 2,
+  UAV_SANDBOX_MSG_READY,
+  UAV_SANDBOX_MSG_STR,
 
-  UAV_SANDBOX_MSG_UPLOAD_BEGIN = 3,
-  UAV_SANDBOX_MSG_UPLOAD_CHUNK = 4,
-  UAV_SANDBOX_MSG_UPLOAD_END = 5,
+  UAV_SANDBOX_MSG_UPLOAD_BEGIN,
+  UAV_SANDBOX_MSG_UPLOAD_CHUNK,
+  UAV_SANDBOX_MSG_UPLOAD_END,
 
-  UAV_SANDBOX_MSG_RUN = 6,
-  UAV_SANDBOX_MSG_KILL = 7,
-  UAV_SANDBOX_MSG_EXIT = 8,
-  UAV_SANDBOX_MSG_EVENT = 9,
-  UAV_SANDBOX_MSG_ERROR = 10
+  UAV_SANDBOX_MSG_RUN,
+  UAV_SANDBOX_MSG_KILL,
+  UAV_SANDBOX_MSG_EXIT,
+  UAV_SANDBOX_MSG_EVENT,
+  UAV_SANDBOX_MSG_ERROR
 };
 
 struct uav_sandbox_proto_msg {
@@ -35,7 +36,10 @@ struct uav_sandbox_proto_msg {
 
 int uav_sandbox_proto_send(int fd, uint16_t type, const void *data, uint32_t length);
 int uav_sandbox_proto_recv(int fd, struct uav_sandbox_proto_msg *h);
-int uav_sandbox_proto_upload(int fd, const uint8_t *data, size_t size);
-int uav_sandbox_proto_download(int fd, uint8_t **data, size_t *size);
+int uav_sandbox_proto_upload(int fd, char *path, size_t path_size,
+    const uint8_t *data, size_t size);
+int uav_sandbox_proto_download(int fd,
+    const struct uav_sandbox_proto_msg *begin, const char *path,
+    uint8_t **data, size_t *size);
 
 #endif //! UAV_SANDBOX_PROTOCOL_H

@@ -18,8 +18,8 @@ endif
 HOST_TARGET    = uav
 AGENT_TARGET   = uav-agent
 TEST_TARGETS   = test/test_sandbox.out
-COMMON_OBJS    = src/sandbox_protocol.o
-OBJS           = src/utils.o src/sandbox.o src/sandbox_ns.o src/sandbox_kvm.o
+COMMON_OBJS    = src/sandbox_protocol.o src/utils.o
+OBJS           = src/sandbox.o src/sandbox_ns.o src/sandbox_kvm.o
 HOST_OBJS      = src/uav.o
 AGENT_OBJS     = agent/uav-agent.o
 TEST_OBJS      = test/test_sandbox.o
@@ -30,10 +30,31 @@ $(HOST_TARGET): $(HOST_OBJS) $(OBJS) $(COMMON_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(AGENT_TARGET): $(AGENT_OBJS) $(COMMON_OBJS)
-	$(CC) $(LDFLAGS) -o $@ $^
+	$(CC) -static $(LDFLAGS) -o $@ $^
 
 $(TEST_TARGETS): %.out: %.o $(OBJS) $(COMMON_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+test: $(TEST_TARGETS)
+	@for t in $(TEST_TARGETS); do \
+		echo "Running $$t..."; \
+		./$$t || exit 1; \
+	done
+
+valgrind: $(TEST_TARGETS)
+	@for t in $(TEST_TARGETS); do \
+		echo "Running $$t with Valgrind..."; \
+		valgrind --tool=memcheck \
+		--leak-check=full \
+		--show-leak-kinds=all \
+		--track-origins=yes \
+		--error-exitcode=1 \
+		--quiet \
+		./$$t || exit 1; \
+	done
+
+package-agent: $(AGENT_TARGET)
+	./scripts/package-agent.sh src/config.h ./$(AGENT_TARGET)
 
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<

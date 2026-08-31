@@ -86,7 +86,11 @@ static int cmd_sandbox_run(int argc, const char *argv[]) {
 
   ret = EXIT_SUCCESS;
 cleanup:
-  uav_sandbox_destroy(&s);
+  ret = uav_sandbox_destroy(&s);
+  if(ret < 0) {
+    fprintf(stderr, "[UAV] cannot destroy sandbox: %s\n", strerror(errno));
+    ret = EXIT_FAILURE;
+  }
   return ret;
 }
 

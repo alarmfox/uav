@@ -68,10 +68,12 @@ error:
 }
 
 int uav_sandbox_kvm_run(const struct uav_sandbox *s, const char *program) {
+  (void) program;
   int kvmfd = -1;
   int ret = -1;
   int shouldexit = 0;
   int mmap_size;
+  int m;
   size_t run_size;
   struct kvm_run *run = NULL;
 
@@ -146,7 +148,8 @@ int uav_sandbox_kvm_run(const struct uav_sandbox *s, const char *program) {
         } else {
           switch (run->io.port) {
             case 0x3f8:
-              write(STDOUT_FILENO, data, len);
+              m = write(STDOUT_FILENO, data, len);
+              (void)m;
               break;
           }
         }
@@ -183,12 +186,17 @@ out:
   return ret;
 }
 
-void uav_sandbox_kvm_destroy(struct uav_sandbox *s) {
-  if(s == NULL) return;
+int uav_sandbox_kvm_destroy(struct uav_sandbox *s) {
+  if(s == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
 
   if (s->data.kvm.guestfd >= 0) close(s->data.kvm.guestfd);
   if (s->data.kvm.vcpufd >= 0) close(s->data.kvm.vcpufd);
   if (s->data.kvm.guestmem != NULL) munmap(s->data.kvm.guestmem, s->data.kvm.guestmem_size);
+
+  return 0;
 }
 
 static int kvm_setup_guest(int kvmfd, struct uav_sandbox *s) {

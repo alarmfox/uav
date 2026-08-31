@@ -6,9 +6,6 @@
 #include "sandbox_protocol.h"
 #include "utils.h"
 
-static int uav_write_all(int fd, const void *buf, size_t len);
-static int uav_read_all(int fd, void *buf, size_t len);
-
 int uav_sandbox_proto_send(int fd, uint16_t type, const void *payload, uint32_t length) {
   unsigned char buf[12];
   int ret;
@@ -85,12 +82,13 @@ int uav_sandbox_proto_recv(int fd, struct uav_sandbox_proto_msg *msg) {
   return msg->length > 0 ? ret = uav_read_all(fd, msg->payload, msg->length) : 0;
 }
 
-int uav_sandbox_proto_upload(int fd, const uint8_t *data, size_t size) {
+int uav_sandbox_proto_upload(int fd, char *path, size_t path_size, const uint8_t *data, size_t size) {
   int ret = -1;
   size_t off = 0, chunk_size = size - off;
   uint32_t sz;
+  struct uav_sandbox_proto_msg msg;
 
-  if (!data || size == 0 || size > UINT32_MAX) {
+  if (!path || path_size == 0 || !data || size == 0 || size > UINT32_MAX) {
     errno = EINVAL;
     return -1;
   }
@@ -98,6 +96,15 @@ int uav_sandbox_proto_upload(int fd, const uint8_t *data, size_t size) {
   sz = htonl(size);
   ret = uav_sandbox_proto_send(fd, UAV_SANDBOX_MSG_UPLOAD_BEGIN, &sz, sizeof(uint32_t));
   if (ret < 0) return ret;
+
+  ret = uav_sandbox_proto_recv(fd, &msg);
+  if (ret < 0) return ret;
+  if (msg.type != UAV_SANDBOX_MSG_STR || msg.length == 0 ||
+      msg.length > path_size || msg.payload[msg.length - 1] != '\0') {
+    errno = EPROTO;
+    return -1;
+  }
+  memcpy(path, msg.payload, msg.length);
 
   while (off < size) {
     chunk_size = size - off;
@@ -112,7 +119,7 @@ int uav_sandbox_proto_upload(int fd, const uint8_t *data, size_t size) {
   return uav_sandbox_proto_send(fd, UAV_SANDBOX_MSG_UPLOAD_END, NULL, 0);
 }
 
-int uav_sandbox_proto_download(int fd, uint8_t **data, size_t *size) {
+int uav_sandbox_proto_download(int fd, const struct uav_sandbox_proto_msg *begin, const char *path, uint8_t **data, size_t *size) {
 
   struct uav_sandbox_proto_msg msg;
   int ret;
@@ -120,21 +127,36 @@ int uav_sandbox_proto_download(int fd, uint8_t **data, size_t *size) {
   size_t off = 0;
   uint8_t *buf = NULL;
 
-  ret = uav_sandbox_proto_recv(fd, &msg);
-  if(ret != 0 || msg.type != UAV_SANDBOX_MSG_UPLOAD_BEGIN || msg.length != sizeof(uint32_t)) {
+  if (begin == NULL || path == NULL || data == NULL || size == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  if (begin->type != UAV_SANDBOX_MSG_UPLOAD_BEGIN ||
+      begin->length != sizeof(uint32_t)) {
     errno = EPROTO;
     return -1;
   }
 
-  memcpy(&sz, msg.payload, sizeof(sz));
+  ret = uav_sandbox_proto_send(fd, UAV_SANDBOX_MSG_STR, (const uint8_t *) path, strlen(path) + 1);
+  if (ret < 0) return ret;
+
+  memcpy(&sz, begin->payload, sizeof(sz));
   sz = ntohl(sz);
   buf = uav_malloc(sz);
 
   while (off < sz) {
     ret = uav_sandbox_proto_recv(fd, &msg);
-    if(ret != 0 || msg.type != UAV_SANDBOX_MSG_UPLOAD_CHUNK || msg.length == 0 || msg.length > (sz - off)) {
+    if (ret < 0) {
       free(buf);
-      return ret;
+      return -1;
+    }
+
+    if (msg.type != UAV_SANDBOX_MSG_UPLOAD_CHUNK || msg.length == 0 ||
+        msg.length > (sz - off)) {
+      errno = EPROTO;
+      free(buf);
+      return -1;
     }
 
     memcpy(buf + off, msg.payload, msg.length);
@@ -142,61 +164,17 @@ int uav_sandbox_proto_download(int fd, uint8_t **data, size_t *size) {
   }
 
   ret = uav_sandbox_proto_recv(fd, &msg);
-  if(ret != 0 || msg.type != UAV_SANDBOX_MSG_UPLOAD_END) {
+  if (ret < 0) {
+    free(buf);
+    return -1;
+  }
+
+  if (msg.type != UAV_SANDBOX_MSG_UPLOAD_END || msg.length != 0) {
     errno = EPROTO;
+    free(buf);
     return -1;
   }
   *data = buf;
   *size = sz;
-  return 0;
-}
-
-static int uav_write_all(int fd, const void *buf, size_t len) {
-  const unsigned char *p = buf;
-
-  while (len > 0) {
-    ssize_t n = write(fd, p, len);
-
-    if (n < 0) {
-      if (errno == EINTR)
-        continue;
-
-      return -1;
-    }
-
-    if (n == 0) {
-      errno = EIO;
-      return -1;
-    }
-
-    p += n;
-    len -= (size_t)n;
-  }
-
-  return 0;
-}
-
-static int uav_read_all(int fd, void *buf, size_t len) {
-  unsigned char *p = buf;
-
-  while (len > 0) {
-    ssize_t n = read(fd, p, len);
-
-    if (n < 0) {
-      if (errno == EINTR)
-        continue;
-
-      return -1;
-    }
-
-    if (n == 0) {
-      errno = ECONNRESET;
-      return -1;
-    }
-
-    p += n;
-    len -= (size_t)n;
-  }
-
   return 0;
 }

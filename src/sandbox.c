@@ -7,10 +7,10 @@
 /* Sandbox helpers */
 int uav_sandbox_ns_create(struct uav_sandbox * s);
 int uav_sandbox_ns_run(const struct uav_sandbox * s, const char *program);
-void uav_sandbox_ns_destroy(struct uav_sandbox * s);
+int uav_sandbox_ns_destroy(struct uav_sandbox * s);
 int uav_sandbox_kvm_create(struct uav_sandbox * s);
 int uav_sandbox_kvm_run(const struct uav_sandbox * s, const char *program);
-void uav_sandbox_kvm_destroy(struct uav_sandbox * s);
+int uav_sandbox_kvm_destroy(struct uav_sandbox * s);
 
 int uav_sandbox_create(struct uav_sandbox *s, enum uav_sandbox_backend type) {
   if (s == NULL) {
@@ -18,8 +18,12 @@ int uav_sandbox_create(struct uav_sandbox *s, enum uav_sandbox_backend type) {
     return -1;
   }
 
+  /* Init sandbox */
   memset(s, 0, sizeof(struct uav_sandbox));
+  s->data.ns.control_fd = -1;
+  s->data.ns.child = -1;
   s->backend = type;
+
   switch (s->backend) {
     case UAV_SANDBOX_BACKEND_NS:
       return uav_sandbox_ns_create(s);
@@ -48,16 +52,18 @@ int uav_sandbox_run_program(const struct uav_sandbox *s, const char *program) {
   return -1;
 }
 
-void uav_sandbox_destroy(struct uav_sandbox *s) {
-  if(s == NULL) return;
+int uav_sandbox_destroy(struct uav_sandbox *s) {
+  if(s == NULL) {
+    errno = EINVAL;
+    return -1;
+  }
 
   switch (s->backend) {
     case UAV_SANDBOX_BACKEND_NS:
-      uav_sandbox_ns_destroy(s);
-      break;
+      return uav_sandbox_ns_destroy(s);
     case UAV_SANDBOX_BACKEND_KVM:
-      uav_sandbox_kvm_destroy(s);
-      break;
+      return uav_sandbox_kvm_destroy(s);
   }
 
+  return -1;
 }

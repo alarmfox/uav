@@ -3,6 +3,7 @@
 
 #include <linux/limits.h>
 #include <stddef.h>
+#include <unistd.h>
 
 enum uav_sandbox_backend {
   UAV_SANDBOX_BACKEND_NS = 0,
@@ -16,10 +17,14 @@ struct uav_sandbox {
   /* Sandbox data */
   union {
     struct {
+      /* Pid of the container */
+      pid_t child;
       /* Base of the stack */
       unsigned char *stack;
       /* Path to the sandbox root */
       char path[PATH_MAX];
+      /* Control socket */
+      int control_fd;
     } ns;
     struct {
       /* Guest file descriptor */
@@ -40,6 +45,6 @@ struct uav_sandbox {
 
 int uav_sandbox_create(struct uav_sandbox *s, enum uav_sandbox_backend type);
 int uav_sandbox_run_program(const struct uav_sandbox *s, const char *program);
-void uav_sandbox_destroy(struct uav_sandbox *s);
+int uav_sandbox_destroy(struct uav_sandbox *s);
 
 #endif //! UAV_SANDBOX_H
