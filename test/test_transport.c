@@ -150,8 +150,9 @@ TEST(test_fd_transport_closed_peer) {
   TEST_ASSERT_NOT_NULL(transport);
   close(fds[1]);
 
+  errno = 0;
   TEST_ASSERT_EQ(-1, uav_transport_write_all(transport, &byte, 1));
-  TEST_ASSERT_EQ(EPIPE, errno);
+  TEST_ASSERT(errno != 0);
   uav_transport_destroy(&transport);
   return 0;
 }

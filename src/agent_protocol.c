@@ -1,4 +1,4 @@
-#include "protocol.h"
+#include "agent_protocol.h"
 
 #include <arpa/inet.h>
 #include <errno.h>

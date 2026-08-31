@@ -5,7 +5,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "protocol.h"
+#include "agent_protocol.h"
 #include "transport.h"
 #include "uav_test.h"
 #include "utils.h"
@@ -148,6 +148,7 @@ TEST(test_protocol_streamed_upload) {
   child = fork();
   TEST_ASSERT(child >= 0);
   if (child == 0) {
+    fclose(source);
     close(fds[0]);
     _exit(receive_upload(fds[1], data, sizeof(data)));
   }

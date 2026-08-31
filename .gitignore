@@ -4,10 +4,12 @@ bpf/vmlinux.h
 test/*.out
 
 # Include these directories and exclude everything else.
+/*
 !/.gitignore
-!/bpf
-!/doc
+!/agent
+!/scripts
 !/src
 !/test
+!/uavd
 !/Makefile
 !/README.md

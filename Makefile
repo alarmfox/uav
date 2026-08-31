@@ -1,7 +1,7 @@
 CPPFLAGS       = -Isrc/ -D_XOPEN_SOURCE=500 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
 CFLAGS         = -Wall -Wextra -std=c11 -fstack-protector-strong -fPIE
 LDFLAGS        = -pie -Wl,-z,relro,-z,now
-HOST_LDLIBS    = -larchive
+UAV_LDLIBS     = -larchive
 AGENT_LDLIBS   = -lcap
 
 ifeq ($(DEBUG),1)
@@ -16,25 +16,28 @@ ifeq ($(RELEASE),1)
 CFLAGS        += -Werror
 endif
 
-HOST_TARGET    = uav
+UAV_TARGET     = uav
 AGENT_TARGET   = uav-agent
-TEST_TARGETS   = test/test_sandbox.out test/test_transport.out test/test_protocol.out
-COMMON_OBJS    = src/protocol.o src/transport.o src/utils.o
-OBJS           = src/sandbox.o src/container.o src/kvm.o
-HOST_OBJS      = src/uav.o
-AGENT_OBJS     = agent/uav-agent.o
-TEST_OBJS      = test/test_sandbox.o test/test_transport.o test/test_protocol.o
+TEST_TARGETS   = test/test_sandbox.out test/test_transport.out test/test_agent_protocol.out
+UAV_OBJS       = uav-cli/main.o src/sandbox.o src/container.o src/kvm.o \
+                 src/agent_protocol.o src/transport.o src/utils.o
+AGENT_OBJS     = agent/uav-agent.o src/agent_protocol.o src/transport.o \
+                 src/utils.o
+TEST_OBJS      = src/sandbox.o src/container.o src/kvm.o \
+                 src/agent_protocol.o src/transport.o src/utils.o
 
-all: $(HOST_TARGET) $(AGENT_TARGET) $(TEST_TARGETS)
+.PHONY: all test valgrind package-agent clean
 
-$(HOST_TARGET): $(HOST_OBJS) $(OBJS) $(COMMON_OBJS)
-	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) $(HOST_LDLIBS)
+all: $(UAV_TARGET) $(AGENT_TARGET) $(TEST_TARGETS)
 
-$(AGENT_TARGET): $(AGENT_OBJS) $(COMMON_OBJS)
+$(UAV_TARGET): $(UAV_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) $(UAV_LDLIBS)
+
+$(AGENT_TARGET): $(AGENT_OBJS)
 	$(CC) -static $(LDFLAGS) -o $@ $^ $(AGENT_LDLIBS)
 
-$(TEST_TARGETS): %.out: %.o $(OBJS) $(COMMON_OBJS)
-	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+$(TEST_TARGETS): %.out: %.o $(TEST_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) $(UAV_LDLIBS)
 
 test: $(TEST_TARGETS)
 	@for t in $(TEST_TARGETS); do \
@@ -61,4 +64,5 @@ package-agent: $(AGENT_TARGET)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 clean:
-	$(RM) $(HOST_TARGET) $(HOST_OBJS) $(AGENT_TARGET) $(AGENT_OBJS) $(COMMON_OBJS) $(TEST_TARGETS) $(TEST_OBJS) $(OBJS)
+	$(RM) $(UAV_TARGET) $(AGENT_TARGET) $(TEST_TARGETS) \
+		uav-cli/*.o uavd/*.o agent/*.o src/*.o test/*.o

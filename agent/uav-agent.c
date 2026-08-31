@@ -20,7 +20,7 @@
 #include <termios.h>
 #include <unistd.h>
 
-#include "protocol.h"
+#include "agent_protocol.h"
 #include "transport.h"
 
 #define UAV_AGENT_DIR "/run/uav"

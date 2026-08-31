@@ -1,5 +1,5 @@
-#ifndef UAV_PROTOCOL_H
-#define UAV_PROTOCOL_H
+#ifndef UAV_AGENT_PROTOCOL_H
+#define UAV_AGENT_PROTOCOL_H
 
 #include <stdint.h>
 
@@ -37,7 +37,7 @@ enum uav_upload_purpose {
   UAV_UPLOAD_EXECUTABLE,
 };
 
-/* Host-order values. protocol.c owns their wire representation. */
+/* Host-order values. agent_protocol.c owns their wire representation. */
 struct uav_upload_meta {
   uint32_t size;
   uint32_t source_mode;
@@ -64,4 +64,4 @@ int uav_proto_decode_exit(const struct uav_proto_msg* msg, int* status);
 int uav_proto_send_error(struct uav_transport* transport, int error);
 int uav_proto_decode_error(const struct uav_proto_msg* msg, int* error);
 
-#endif  // !UAV_PROTOCOL_H
+#endif  // !UAV_AGENT_PROTOCOL_H

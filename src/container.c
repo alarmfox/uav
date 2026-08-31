@@ -12,7 +12,7 @@
 #include <unistd.h>
 
 #include "config.h"
-#include "protocol.h"
+#include "agent_protocol.h"
 #include "sandbox.h"
 #include "transport.h"
 #include "utils.h"

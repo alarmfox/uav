@@ -17,7 +17,12 @@ The goal is to have a program that has:
 
 ## Architecture
 
-TODO
+- `uav` is the unprivileged command-line client that creates and runs the
+  sandbox.
+- `uavd` is the privileged host component. It places sandbox processes in
+  cgroups and manages the eBPF programs used for real-time detection.
+- `uav-agent` runs inside container and KVM sandboxes and executes commands
+  received through the agent protocol.
 
 ## Dependencies
 
