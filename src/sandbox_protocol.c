@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #include "sandbox_protocol.h"
+#include "utils.h"
 
 static int uav_write_all(int fd, const void *buf, size_t len);
 static int uav_read_all(int fd, void *buf, size_t len);
@@ -82,6 +83,72 @@ int uav_sandbox_proto_recv(int fd, struct uav_sandbox_proto_msg *msg) {
   }
 
   return msg->length > 0 ? ret = uav_read_all(fd, msg->payload, msg->length) : 0;
+}
+
+int uav_sandbox_proto_upload(int fd, const uint8_t *data, size_t size) {
+  int ret = -1;
+  size_t off = 0, chunk_size = size - off;
+  uint32_t sz;
+
+  if (!data || size == 0 || size > UINT32_MAX) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  sz = htonl(size);
+  ret = uav_sandbox_proto_send(fd, UAV_SANDBOX_MSG_UPLOAD_BEGIN, &sz, sizeof(uint32_t));
+  if (ret < 0) return ret;
+
+  while (off < size) {
+    chunk_size = size - off;
+    if (chunk_size > UAV_SANDBOX_PROTO_MAX_CHUNK) chunk_size = UAV_SANDBOX_PROTO_MAX_CHUNK;
+
+    ret =  uav_sandbox_proto_send(fd, UAV_SANDBOX_MSG_UPLOAD_CHUNK, data + off, chunk_size);
+    if (ret < 0) return ret;
+
+    off += chunk_size;
+  }
+
+  return uav_sandbox_proto_send(fd, UAV_SANDBOX_MSG_UPLOAD_END, NULL, 0);
+}
+
+int uav_sandbox_proto_download(int fd, uint8_t **data, size_t *size) {
+
+  struct uav_sandbox_proto_msg msg;
+  int ret;
+  uint32_t sz;
+  size_t off = 0;
+  uint8_t *buf = NULL;
+
+  ret = uav_sandbox_proto_recv(fd, &msg);
+  if(ret != 0 || msg.type != UAV_SANDBOX_MSG_UPLOAD_BEGIN || msg.length != sizeof(uint32_t)) {
+    errno = EPROTO;
+    return -1;
+  }
+
+  memcpy(&sz, msg.payload, sizeof(sz));
+  sz = ntohl(sz);
+  buf = uav_malloc(sz);
+
+  while (off < sz) {
+    ret = uav_sandbox_proto_recv(fd, &msg);
+    if(ret != 0 || msg.type != UAV_SANDBOX_MSG_UPLOAD_CHUNK || msg.length == 0 || msg.length > (sz - off)) {
+      free(buf);
+      return ret;
+    }
+
+    memcpy(buf + off, msg.payload, msg.length);
+    off += msg.length;
+  }
+
+  ret = uav_sandbox_proto_recv(fd, &msg);
+  if(ret != 0 || msg.type != UAV_SANDBOX_MSG_UPLOAD_END) {
+    errno = EPROTO;
+    return -1;
+  }
+  *data = buf;
+  *size = sz;
+  return 0;
 }
 
 static int uav_write_all(int fd, const void *buf, size_t len) {

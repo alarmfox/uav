@@ -166,7 +166,7 @@ int uav_sandbox_ns_run(const struct uav_sandbox *s, const char *program) {
   ret = uav_setup_userns_mappings(child, uid, gid);
   if (ret != 0) goto cleanup;
 
-  ret = uav_sandbox_proto_send(control_fd[0], UAV_SANDBOX_MSG_CONFIG_DONE, NULL, 0);
+  ret = uav_sandbox_proto_send(control_fd[0], UAV_SANDBOX_MSG_READY, NULL, 0);
   if (ret < 0) goto cleanup;
 
   ret = uav_sandbox_proto_recv(control_fd[0], &msg);
@@ -735,7 +735,7 @@ static int sandbox_entrypoint(void *ptr) {
 
   /* Wait for parent mapping */
   ret = uav_sandbox_proto_recv(args->control_fd, &msg);
-  if (ret < 0 || msg.type != UAV_SANDBOX_MSG_CONFIG_DONE) {
+  if (ret < 0 || msg.type != UAV_SANDBOX_MSG_READY) {
     err_msg = "recv_msg: mappings not done";
     goto fail;
   }
