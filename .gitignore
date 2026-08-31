@@ -1,6 +1,5 @@
 *.o
 bpf/vmlinux.h
-*.skel.h
 test/*.out
 
 # Include these directories and exclude everything else.
@@ -10,6 +9,7 @@ test/*.out
 !/scripts
 !/src
 !/test
+!/uav-cli
 !/uavd
 !/Makefile
 !/README.md
