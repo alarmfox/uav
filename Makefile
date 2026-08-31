@@ -12,20 +12,31 @@ CFLAGS        += -O2
 endif
 
 ifeq ($(RELEASE),1)
-CFLAGS      += -Werror
+CFLAGS        += -Werror
 endif
 
-TARGET         = uav
-SRCS           = src/uav.c src/utils.c src/sandbox.c src/sandbox_protocol.c src/sandbox_ns.c src/sandbox_kvm.c
-OBJS           = src/uav.o src/utils.o src/sandbox.o src/sandbox_protocol.o src/sandbox_ns.o src/sandbox_kvm.o
+HOST_TARGET    = uav
+AGENT_TARGET   = uav-agent
+TEST_TARGETS   = test/test_sandbox.out
+COMMON_OBJS    = src/sandbox_protocol.o
+OBJS           = src/utils.o src/sandbox.o src/sandbox_ns.o src/sandbox_kvm.o
+HOST_OBJS      = src/uav.o
+AGENT_OBJS     = agent/uav-agent.o
+TEST_OBJS      = test/test_sandbox.o
 
-all: $(TARGET)
+all: $(HOST_TARGET) $(AGENT_TARGET) $(TEST_TARGETS)
 
-$(TARGET): $(OBJS)
+$(HOST_TARGET): $(HOST_OBJS) $(OBJS) $(COMMON_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(AGENT_TARGET): $(AGENT_OBJS) $(COMMON_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^
+
+$(TEST_TARGETS): %.out: %.o $(OBJS) $(COMMON_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 clean:
-	$(RM) $(TARGET) $(OBJS)
+	$(RM) $(HOST_TARGET) $(HOST_OBJS) $(AGENT_TARGET) $(AGENT_OBJS) $(COMMON_OBJS) $(TEST_TARGETS) $(TEST_OBJS) $(OBJS)

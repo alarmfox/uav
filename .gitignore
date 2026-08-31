@@ -1,6 +1,7 @@
 *.o
 bpf/vmlinux.h
 *.skel.h
+test/*.out
 
 # Include these directories and exclude everything else.
 !/.gitignore
