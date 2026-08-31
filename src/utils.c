@@ -20,7 +20,7 @@ static int unlink_cb(const char* fpath, const struct stat* sb, int typeflag,
 }
 
 /* Delete a directory recursively */
-int rmtree(const char* path) {
+int uav_rmtree(const char* path) {
   return nftw(path, unlink_cb, 64, FTW_DEPTH | FTW_PHYS);
 }
 

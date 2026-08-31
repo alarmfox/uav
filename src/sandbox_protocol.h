@@ -1,10 +1,10 @@
 #ifndef UAV_SANDBOX_PROTOCOL_H
 #define UAV_SANDBOX_PROTOCOL_H
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
-#define UAV_SANDBOX_PROTO_MAGIC   0x55415653u /* "UAVS" */
+#define UAV_SANDBOX_PROTO_MAGIC 0x55415653u /* "UAVS" */
 #define UAV_SANDBOX_PROTO_VERSION 1
 #define UAV_SANDBOX_PROTO_MAX_PAYLOAD (64 * 1024)
 #define UAV_SANDBOX_PROTO_MAX_CHUNK (8 * 1024)
@@ -34,12 +34,13 @@ struct uav_sandbox_proto_msg {
   uint8_t payload[UAV_SANDBOX_PROTO_MAX_PAYLOAD];
 };
 
-int uav_sandbox_proto_send(int fd, uint16_t type, const void *data, uint32_t length);
-int uav_sandbox_proto_recv(int fd, struct uav_sandbox_proto_msg *h);
-int uav_sandbox_proto_upload(int fd, char *path, size_t path_size,
-    const uint8_t *data, size_t size);
+int uav_sandbox_proto_send(int fd, uint16_t type, const void* data,
+                           uint32_t length);
+int uav_sandbox_proto_recv(int fd, struct uav_sandbox_proto_msg* h);
+int uav_sandbox_proto_upload(int fd, char* path, size_t path_size,
+                             const uint8_t* data, size_t size);
 int uav_sandbox_proto_download(int fd,
-    const struct uav_sandbox_proto_msg *begin, const char *path,
-    uint8_t **data, size_t *size);
+                               const struct uav_sandbox_proto_msg* begin,
+                               const char* path, uint8_t** data, size_t* size);
 
-#endif //! UAV_SANDBOX_PROTOCOL_H
+#endif  //! UAV_SANDBOX_PROTOCOL_H

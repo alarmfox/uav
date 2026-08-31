@@ -8,20 +8,20 @@
 
 /* Crash on out of memory */
 static inline void* uav_malloc(size_t size) {
-  void *p = malloc(size);
+  void* p = malloc(size);
   if (p == NULL) {
-    fprintf(stderr, "[UAV] out of memory (%s:%d)", __FILE__,  __LINE__);
+    fprintf(stderr, "[UAV] out of memory (%s:%d)", __FILE__, __LINE__);
     exit(2);
   }
   return p;
 }
 
-static inline int mkdir_if_missing(const char *path, mode_t mode) {
+static inline int mkdir_if_missing(const char* path, mode_t mode) {
   struct stat st;
   int ret = -1;
 
   ret = mkdir(path, mode);
-  if (ret == 0)  return 0;
+  if (ret == 0) return 0;
 
   if (errno != EEXIST) return -1;
 
@@ -36,13 +36,10 @@ static inline int mkdir_if_missing(const char *path, mode_t mode) {
   return 0;
 }
 
-int rmtree(const char *path);
-char *uav_path_join(const char *p1, const char *p2);
-int uav_write_file(const char *path, const char *data, size_t len);
-int uav_write_file_str(const char *path, const char *str);
-int copyfile(const char *src, const char *dst);
+int uav_rmtree(const char* path);
+char* uav_path_join(const char* p1, const char* p2);
 
-int uav_write_all(int fd, const void *buf, size_t len);
-int uav_read_all(int fd, void *buf, size_t len);
+int uav_write_all(int fd, const void* buf, size_t len);
+int uav_read_all(int fd, void* buf, size_t len);
 
-#endif // !UAV_UTILS_H
+#endif  // !UAV_UTILS_H

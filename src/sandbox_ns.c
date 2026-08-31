@@ -296,7 +296,7 @@ int uav_sandbox_ns_destroy(struct uav_sandbox* s) {
   }
 
   if (s->data.ns.path[0] != '\0') {
-    ret = rmtree(s->data.ns.path);
+    ret = uav_rmtree(s->data.ns.path);
     if (ret) {
       fprintf(stderr, "[UAV] cannot remove tree %s: %s\n", s->data.ns.path,
               strerror(errno));
