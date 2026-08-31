@@ -38,8 +38,6 @@ static inline int mkdir_if_missing(const char* path, mode_t mode) {
 
 int uav_rmtree(const char* path);
 char* uav_path_join(const char* p1, const char* p2);
-
-int uav_write_all(int fd, const void* buf, size_t len);
-int uav_read_all(int fd, void* buf, size_t len);
+int uav_fd_write_all(int fd, const void* buf, size_t size);
 
 #endif  // !UAV_UTILS_H

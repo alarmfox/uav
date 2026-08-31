@@ -28,7 +28,7 @@ static int cmd_sandbox_run(int argc, const char* argv[]) {
   int ret = EXIT_FAILURE;
   int opt;
   struct uav_sandbox s;
-  enum uav_sandbox_backend backend = UAV_SANDBOX_BACKEND_NS;
+  enum uav_sandbox_backend backend = UAV_SANDBOX_BACKEND_CONTAINER;
   const char* program = NULL;
 
   static const struct option long_options[] = {
@@ -43,7 +43,7 @@ static int cmd_sandbox_run(int argc, const char* argv[]) {
         if (!strcmp(optarg, "kvm"))
           backend = UAV_SANDBOX_BACKEND_KVM;
         else if (!strcmp(optarg, "container"))
-          backend = UAV_SANDBOX_BACKEND_NS;
+          backend = UAV_SANDBOX_BACKEND_CONTAINER;
         else {
           fprintf(stderr,
                   "[UAV] invalid sandbox backend %s. Allowed 'kvm' or "

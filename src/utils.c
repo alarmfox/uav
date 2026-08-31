@@ -201,15 +201,14 @@ cleanup:
   return ret;
 }
 
-int uav_write_all(int fd, const void* buf, size_t len) {
+int uav_fd_write_all(int fd, const void* buf, size_t size) {
   const unsigned char* p = buf;
 
-  while (len > 0) {
-    ssize_t n = write(fd, p, len);
+  while (size > 0) {
+    ssize_t n = write(fd, p, size);
 
     if (n < 0) {
       if (errno == EINTR) continue;
-
       return -1;
     }
 
@@ -219,31 +218,7 @@ int uav_write_all(int fd, const void* buf, size_t len) {
     }
 
     p += n;
-    len -= (size_t)n;
-  }
-
-  return 0;
-}
-
-int uav_read_all(int fd, void* buf, size_t len) {
-  unsigned char* p = buf;
-
-  while (len > 0) {
-    ssize_t n = read(fd, p, len);
-
-    if (n < 0) {
-      if (errno == EINTR) continue;
-
-      return -1;
-    }
-
-    if (n == 0) {
-      errno = ECONNRESET;
-      return -1;
-    }
-
-    p += n;
-    len -= (size_t)n;
+    size -= (size_t)n;
   }
 
   return 0;

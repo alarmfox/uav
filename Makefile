@@ -17,12 +17,12 @@ endif
 
 HOST_TARGET    = uav
 AGENT_TARGET   = uav-agent
-TEST_TARGETS   = test/test_sandbox.out
-COMMON_OBJS    = src/sandbox_protocol.o src/utils.o
-OBJS           = src/sandbox.o src/sandbox_ns.o src/sandbox_kvm.o
+TEST_TARGETS   = test/test_sandbox.out test/test_transport.out
+COMMON_OBJS    = src/protocol.o src/transport.o src/utils.o
+OBJS           = src/sandbox.o src/container.o src/kvm.o
 HOST_OBJS      = src/uav.o
 AGENT_OBJS     = agent/uav-agent.o
-TEST_OBJS      = test/test_sandbox.o
+TEST_OBJS      = test/test_sandbox.o test/test_transport.o
 
 all: $(HOST_TARGET) $(AGENT_TARGET) $(TEST_TARGETS)
 
@@ -54,7 +54,7 @@ valgrind: $(TEST_TARGETS)
 	done
 
 package-agent: $(AGENT_TARGET)
-	./scripts/package-agent.sh src/config.h ./$(AGENT_TARGET)
+	./scripts/package-agent.sh src/config.h $(AGENT_TARGET)
 
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<

@@ -37,19 +37,19 @@ int uav_sandbox_kvm_create(struct uav_sandbox* s) {
   s->data.kvm.guestmem_size = UAV_SANDBOX_KVM_GUEST_RAM;
 
   kvmfd = open("/dev/kvm", O_RDWR);
-  if (kvmfd < 0) goto error;
+  if (kvmfd < 0) goto out;
 
   ret = kvm_setup_guest(kvmfd, s);
-  if (ret < 0) goto error;
+  if (ret < 0) goto out;
 
   ret = kvm_load_images(s);
-  if (ret < 0) goto error;
+  if (ret < 0) goto out;
 
   ret = kvm_setup_guest_vcpu(kvmfd, s);
-  if (ret < 0) goto error;
+  if (ret < 0) goto out;
 
   ret = 0;
-error:
+out:
   if (kvmfd >= 0) close(kvmfd);
   if (ret != 0 && s->data.kvm.guestfd >= 0) {
     close(s->data.kvm.guestfd);
@@ -80,9 +80,7 @@ int uav_sandbox_kvm_run(const struct uav_sandbox* s, const char* program) {
   kvmfd = open("/dev/kvm", O_RDWR);
   if (kvmfd < 0) goto out;
 
-  /* Run the KVM vCPU */
   mmap_size = ioctl(kvmfd, KVM_GET_VCPU_MMAP_SIZE, 0);
-
   if (mmap_size < 0) goto out;
   if ((size_t)mmap_size < sizeof(struct kvm_run)) {
     errno = EPROTO;
@@ -92,7 +90,6 @@ int uav_sandbox_kvm_run(const struct uav_sandbox* s, const char* program) {
   run_size = (size_t)mmap_size;
   run = mmap(0, run_size, PROT_READ | PROT_WRITE, MAP_SHARED,
              s->data.kvm.vcpufd, 0);
-
   if (run == MAP_FAILED) {
     run = NULL;
     goto out;
@@ -191,17 +188,42 @@ out:
 }
 
 int uav_sandbox_kvm_destroy(struct uav_sandbox* s) {
+  int ret = 0;
+  int saved_errno = 0;
+
   if (s == NULL) {
     errno = EINVAL;
     return -1;
   }
 
-  if (s->data.kvm.guestfd >= 0) close(s->data.kvm.guestfd);
-  if (s->data.kvm.vcpufd >= 0) close(s->data.kvm.vcpufd);
-  if (s->data.kvm.guestmem != NULL)
-    munmap(s->data.kvm.guestmem, s->data.kvm.guestmem_size);
+  if (s->data.kvm.guestfd >= 0) {
+    if (close(s->data.kvm.guestfd) < 0) {
+      ret = -1;
+      saved_errno = errno;
+    }
+    s->data.kvm.guestfd = -1;
+  }
 
-  return 0;
+  if (s->data.kvm.vcpufd >= 0) {
+    if (close(s->data.kvm.vcpufd) < 0 && ret == 0) {
+      ret = -1;
+      saved_errno = errno;
+    }
+    s->data.kvm.vcpufd = -1;
+  }
+
+  if (s->data.kvm.guestmem != NULL) {
+    if (munmap(s->data.kvm.guestmem, s->data.kvm.guestmem_size) < 0 &&
+        ret == 0) {
+      ret = -1;
+      saved_errno = errno;
+    }
+    s->data.kvm.guestmem = NULL;
+  }
+
+  if (ret < 0) errno = saved_errno;
+
+  return ret;
 }
 
 static int kvm_setup_guest(int kvmfd, struct uav_sandbox* s) {

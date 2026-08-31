@@ -6,13 +6,18 @@
 #include <unistd.h>
 
 enum uav_sandbox_backend {
-  UAV_SANDBOX_BACKEND_NS = 0,
+  UAV_SANDBOX_BACKEND_CONTAINER = 0,
   UAV_SANDBOX_BACKEND_KVM,
 };
+
+struct uav_transport;
 
 struct uav_sandbox {
   /* Backend used to execute the sandbox */
   enum uav_sandbox_backend backend;
+
+  /* Transport interface */
+  struct uav_transport* trans;
 
   /* Sandbox data */
   union {
@@ -23,9 +28,7 @@ struct uav_sandbox {
       unsigned char* stack;
       /* Path to the sandbox root */
       char path[PATH_MAX];
-      /* Control socket */
-      int control_fd;
-    } ns;
+    } container;
     struct {
       /* Guest file descriptor */
       int guestfd;
