@@ -1,6 +1,6 @@
-#include <arpa/inet.h>
 #include <archive.h>
 #include <archive_entry.h>
+#include <arpa/inet.h>
 #include <errno.h>
 #include <sched.h>
 #include <stdio.h>
@@ -13,8 +13,8 @@
 #include <unistd.h>
 
 #include "config.h"
-#include "sandbox.h"
 #include "protocol.h"
+#include "sandbox.h"
 #include "transport.h"
 #include "utils.h"
 
@@ -73,8 +73,8 @@ int uav_sandbox_ns_create(struct uav_sandbox* s) {
     paths[i] = uav_path_join(s->data.container.path, subdirs[i]);
     if (paths[i] == NULL) {
       errno = ENAMETOOLONG;
-      fprintf(stderr, "[UAV] cannot join paths (%s, %s)\n", s->data.container.path,
-              subdirs[i]);
+      fprintf(stderr, "[UAV] cannot join paths (%s, %s)\n",
+              s->data.container.path, subdirs[i]);
       goto cleanup;
     }
 
@@ -224,8 +224,7 @@ int uav_sandbox_ns_run(const struct uav_sandbox* s, const char* program) {
   ret = uav_proto_upload(s->trans, path, sizeof(path), data, len_file);
   if (ret != 0) goto cleanup;
 
-  ret = uav_proto_send(s->trans, UAV_MSG_RUN, path,
-                               strlen(path) + 1);
+  ret = uav_proto_send(s->trans, UAV_MSG_RUN, path, strlen(path) + 1);
   if (ret != 0) goto cleanup;
 
   for (;;) {
@@ -291,22 +290,21 @@ int uav_sandbox_ns_destroy(struct uav_sandbox* s) {
   }
 
   if (s->data.container.child > 0) {
-    if (s->trans &&
-        uav_proto_send(s->trans, UAV_MSG_EXIT, NULL, 0) == 0) {
+    if (s->trans && uav_proto_send(s->trans, UAV_MSG_EXIT, NULL, 0) == 0) {
       graceful_exit = 1;
     }
 
     if (!graceful_exit && kill(s->data.container.child, SIGKILL) < 0 &&
         errno != ESRCH) {
-      fprintf(stderr, "[UAV] cannot kill child %d: %s\n", s->data.container.child,
-              strerror(errno));
+      fprintf(stderr, "[UAV] cannot kill child %d: %s\n",
+              s->data.container.child, strerror(errno));
       ret = -1;
       saved_errno = errno;
     }
 
     if (waitpid_nointr(s->data.container.child, NULL) < 0 && errno != ECHILD) {
-      fprintf(stderr, "[UAV] cannot reap child %d: %s\n", s->data.container.child,
-              strerror(errno));
+      fprintf(stderr, "[UAV] cannot reap child %d: %s\n",
+              s->data.container.child, strerror(errno));
       if (ret == 0) {
         ret = -1;
         saved_errno = errno;
@@ -323,8 +321,8 @@ int uav_sandbox_ns_destroy(struct uav_sandbox* s) {
 
   if (s->data.container.path[0] != '\0') {
     if (uav_rmtree(s->data.container.path) < 0) {
-      fprintf(stderr, "[UAV] cannot remove tree %s: %s\n", s->data.container.path,
-              strerror(errno));
+      fprintf(stderr, "[UAV] cannot remove tree %s: %s\n",
+              s->data.container.path, strerror(errno));
       if (ret == 0) {
         ret = -1;
         saved_errno = errno;
@@ -828,8 +826,7 @@ fail: {
 
   fprintf(stderr, "[UAV] sandbox failure at %s: %s\n",
           err_msg ? err_msg : "unknown", strerror(saved_errno));
-  uav_proto_send(transport, UAV_MSG_ERROR, &saved_errno,
-                         sizeof(saved_errno));
+  uav_proto_send(transport, UAV_MSG_ERROR, &saved_errno, sizeof(saved_errno));
   uav_transport_destroy(&transport);
   _exit(1);
 }

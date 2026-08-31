@@ -36,15 +36,13 @@ struct uav_proto_msg {
 
 struct uav_transport;
 
-int uav_proto_send(struct uav_transport* t, uint16_t type,
-                           const void* data, uint32_t length);
-int uav_proto_recv(struct uav_transport* t,
-                           struct uav_proto_msg* h);
-int uav_proto_upload(struct uav_transport* t, char* path,
-                             size_t path_size, const uint8_t* data,
-                             size_t size);
+int uav_proto_send(struct uav_transport* t, uint16_t type, const void* data,
+                   uint32_t length);
+int uav_proto_recv(struct uav_transport* t, struct uav_proto_msg* h);
+int uav_proto_upload(struct uav_transport* t, char* path, size_t path_size,
+                     const uint8_t* data, size_t size);
 int uav_proto_download(struct uav_transport* t,
-                               const struct uav_proto_msg* begin,
-                               const char* path, uint8_t** data, size_t* size);
+                       const struct uav_proto_msg* begin, const char* path,
+                       uint8_t** data, size_t* size);
 
 #endif  //! UAV_PROTOCOL_H

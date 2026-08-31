@@ -1,14 +1,15 @@
 #include "protocol.h"
-#include "transport.h"
-#include "utils.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
 #include <string.h>
 #include <unistd.h>
 
-int uav_proto_send(struct uav_transport* t, uint16_t type,
-                           const void* payload, uint32_t length) {
+#include "transport.h"
+#include "utils.h"
+
+int uav_proto_send(struct uav_transport* t, uint16_t type, const void* payload,
+                   uint32_t length) {
   unsigned char buf[12];
   int ret;
 
@@ -43,8 +44,7 @@ int uav_proto_send(struct uav_transport* t, uint16_t type,
   return 0;
 }
 
-int uav_proto_recv(struct uav_transport* t,
-                           struct uav_proto_msg* msg) {
+int uav_proto_recv(struct uav_transport* t, struct uav_proto_msg* msg) {
   unsigned char buf[12];
   int ret;
 
@@ -91,9 +91,8 @@ int uav_proto_recv(struct uav_transport* t,
                          : 0;
 }
 
-int uav_proto_upload(struct uav_transport* t, char* path,
-                             size_t path_size, const uint8_t* data,
-                             size_t size) {
+int uav_proto_upload(struct uav_transport* t, char* path, size_t path_size,
+                     const uint8_t* data, size_t size) {
   int ret = -1;
   size_t off = 0, chunk_size = size - off;
   uint32_t sz;
@@ -105,14 +104,13 @@ int uav_proto_upload(struct uav_transport* t, char* path,
   }
 
   sz = htonl(size);
-  ret = uav_proto_send(t, UAV_MSG_UPLOAD_BEGIN, &sz,
-                               sizeof(uint32_t));
+  ret = uav_proto_send(t, UAV_MSG_UPLOAD_BEGIN, &sz, sizeof(uint32_t));
   if (ret < 0) return ret;
 
   ret = uav_proto_recv(t, &msg);
   if (ret < 0) return ret;
-  if (msg.type != UAV_MSG_STR || msg.length == 0 ||
-      msg.length > path_size || msg.payload[msg.length - 1] != '\0') {
+  if (msg.type != UAV_MSG_STR || msg.length == 0 || msg.length > path_size ||
+      msg.payload[msg.length - 1] != '\0') {
     errno = EPROTO;
     return -1;
   }
@@ -120,11 +118,9 @@ int uav_proto_upload(struct uav_transport* t, char* path,
 
   while (off < size) {
     chunk_size = size - off;
-    if (chunk_size > UAV_PROTO_MAX_CHUNK)
-      chunk_size = UAV_PROTO_MAX_CHUNK;
+    if (chunk_size > UAV_PROTO_MAX_CHUNK) chunk_size = UAV_PROTO_MAX_CHUNK;
 
-    ret = uav_proto_send(t, UAV_MSG_UPLOAD_CHUNK, data + off,
-                                 chunk_size);
+    ret = uav_proto_send(t, UAV_MSG_UPLOAD_CHUNK, data + off, chunk_size);
     if (ret < 0) return ret;
 
     off += chunk_size;
@@ -134,8 +130,8 @@ int uav_proto_upload(struct uav_transport* t, char* path,
 }
 
 int uav_proto_download(struct uav_transport* t,
-                               const struct uav_proto_msg* begin,
-                               const char* path, uint8_t** data, size_t* size) {
+                       const struct uav_proto_msg* begin, const char* path,
+                       uint8_t** data, size_t* size) {
   struct uav_proto_msg msg;
   int ret;
   uint32_t sz;
@@ -153,8 +149,7 @@ int uav_proto_download(struct uav_transport* t,
     return -1;
   }
 
-  ret = uav_proto_send(t, UAV_MSG_STR, (const uint8_t*)path,
-                               strlen(path) + 1);
+  ret = uav_proto_send(t, UAV_MSG_STR, (const uint8_t*)path, strlen(path) + 1);
   if (ret < 0) return ret;
 
   memcpy(&sz, begin->payload, sizeof(sz));

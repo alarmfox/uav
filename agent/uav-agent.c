@@ -128,8 +128,7 @@ static int uav_agent_setup(void) {
   if (agent.transport == NULL) return -1;
 
   /* Setup is complete. The host may start sending commands. */
-  return uav_proto_send(agent.transport, UAV_MSG_READY, NULL,
-                                0);
+  return uav_proto_send(agent.transport, UAV_MSG_READY, NULL, 0);
 }
 
 static void uav_agent_cleanup(void) {
@@ -157,8 +156,8 @@ static int uav_agent_send_error(int error) {
 
   if (agent.transport == NULL) return -1;
 
-  return uav_proto_send(agent.transport, UAV_MSG_ERROR,
-                                &payload, sizeof(payload));
+  return uav_proto_send(agent.transport, UAV_MSG_ERROR, &payload,
+                        sizeof(payload));
 }
 
 static int uav_agent_upload(const struct uav_proto_msg* begin) {
@@ -182,8 +181,7 @@ static int uav_agent_upload(const struct uav_proto_msg* begin) {
   flags = fcntl(fd, F_GETFD);
   if (flags < 0 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0) goto out;
 
-  if (uav_proto_download(agent.transport, begin, path, &data, &size) <
-      0)
+  if (uav_proto_download(agent.transport, begin, path, &data, &size) < 0)
     goto out;
 
   if (uav_fd_write_all(fd, data, size) < 0) goto out;
@@ -281,7 +279,7 @@ static int uav_agent_check_program(void) {
   payload = htonl((uint32_t)status);
 
   return uav_proto_send(agent.transport, UAV_MSG_EXIT, &payload,
-                                sizeof(payload));
+                        sizeof(payload));
 }
 
 static int uav_agent_dispatch(const struct uav_proto_msg* msg) {
