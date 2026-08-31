@@ -1,11 +1,10 @@
 #include <archive.h>
 #include <archive_entry.h>
-#include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sched.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
@@ -139,8 +138,10 @@ int uav_sandbox_ns_create(struct uav_sandbox* s) {
   if (ret < 0) goto cleanup;
 
   if (msg.type == UAV_MSG_ERROR) {
+    int remote_error;
+
     fprintf(stderr, "[UAV] child setup failed\n");
-    errno = EIO;
+    if (uav_proto_decode_error(&msg, &remote_error) == 0) errno = remote_error;
     ret = -1;
     goto cleanup;
   }
@@ -186,27 +187,13 @@ int uav_sandbox_ns_run(const struct uav_sandbox* s, const char* program) {
   int ret = -1;
   int fd = -1;
   int saved_errno;
-  char path[PATH_MAX];
-  uint8_t* data = NULL;
   struct stat st;
-  size_t len_file;
-  size_t program_len;
+  struct uav_upload_meta meta;
 
   if (s == NULL || program == NULL) {
     errno = EINVAL;
     return -1;
   }
-
-  /*
-   * Include the terminating NUL and ensure the pathname fits in one
-   * protocol message.
-   */
-  program_len = strnlen(program, UAV_PROTO_MAX_PAYLOAD);
-  if (program_len == UAV_PROTO_MAX_PAYLOAD) {
-    errno = ENAMETOOLONG;
-    return -1;
-  }
-  program_len++;
 
   fd = open(program, O_RDONLY | O_NOFOLLOW);
   if (fd < 0) {
@@ -216,15 +203,23 @@ int uav_sandbox_ns_run(const struct uav_sandbox* s, const char* program) {
   ret = fstat(fd, &st);
   if (ret < 0) goto cleanup;
 
-  len_file = st.st_size;
+  if (!S_ISREG(st.st_mode)) {
+    errno = EINVAL;
+    goto cleanup;
+  }
+  if (st.st_size <= 0 || (uintmax_t)st.st_size > UINT32_MAX) {
+    errno = EFBIG;
+    goto cleanup;
+  }
 
-  data = mmap(NULL, len_file, PROT_READ, MAP_PRIVATE, fd, 0);
-  if (data == MAP_FAILED) goto cleanup;
+  meta.size = (uint32_t)st.st_size;
+  meta.source_mode = (uint32_t)st.st_mode & 0777U;
+  meta.purpose = UAV_UPLOAD_EXECUTABLE;
 
-  ret = uav_proto_upload(s->trans, path, sizeof(path), data, len_file);
+  ret = uav_proto_upload(s->trans, fd, &meta);
   if (ret != 0) goto cleanup;
 
-  ret = uav_proto_send(s->trans, UAV_MSG_RUN, path, strlen(path) + 1);
+  ret = uav_proto_send(s->trans, UAV_MSG_RUN, NULL, 0);
   if (ret != 0) goto cleanup;
 
   for (;;) {
@@ -236,18 +231,11 @@ int uav_sandbox_ns_run(const struct uav_sandbox* s, const char* program) {
     if (msg.type == UAV_MSG_EVENT) continue;
 
     if (msg.type == UAV_MSG_EXIT) {
-      uint32_t status;
+      int status;
 
-      if (msg.length != sizeof(status)) {
-        errno = EPROTO;
-        ret = -1;
-        goto cleanup;
-      }
+      if (uav_proto_decode_exit(&msg, &status) < 0) goto cleanup;
 
-      memcpy(&status, msg.payload, sizeof(status));
-      status = ntohl(status);
-
-      if (!WIFEXITED((int)status) || WEXITSTATUS((int)status) != 0) {
+      if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         errno = EIO;
         ret = -1;
         goto cleanup;
@@ -258,7 +246,10 @@ int uav_sandbox_ns_run(const struct uav_sandbox* s, const char* program) {
     }
 
     if (msg.type == UAV_MSG_ERROR) {
-      errno = EIO;
+      int remote_error;
+
+      if (uav_proto_decode_error(&msg, &remote_error) == 0)
+        errno = remote_error;
       ret = -1;
       goto cleanup;
     }
@@ -271,10 +262,8 @@ int uav_sandbox_ns_run(const struct uav_sandbox* s, const char* program) {
 cleanup:
   saved_errno = errno;
   if (fd >= 0) close(fd);
-  if (data != NULL && data != MAP_FAILED) munmap(data, len_file);
 
   errno = saved_errno;
-  ;
 
   return ret;
 }
@@ -826,7 +815,7 @@ fail: {
 
   fprintf(stderr, "[UAV] sandbox failure at %s: %s\n",
           err_msg ? err_msg : "unknown", strerror(saved_errno));
-  uav_proto_send(transport, UAV_MSG_ERROR, &saved_errno, sizeof(saved_errno));
+  uav_proto_send_error(transport, saved_errno);
   uav_transport_destroy(&transport);
   _exit(1);
 }

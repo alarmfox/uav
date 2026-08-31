@@ -1,7 +1,8 @@
 CPPFLAGS       = -Isrc/ -D_XOPEN_SOURCE=500 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
 CFLAGS         = -Wall -Wextra -std=c11 -fstack-protector-strong -fPIE
 LDFLAGS        = -pie -Wl,-z,relro,-z,now
-LDLIBS         = -larchive
+HOST_LDLIBS    = -larchive
+AGENT_LDLIBS   = -lcap
 
 ifeq ($(DEBUG),1)
 CFLAGS        += -O0 -g
@@ -17,20 +18,20 @@ endif
 
 HOST_TARGET    = uav
 AGENT_TARGET   = uav-agent
-TEST_TARGETS   = test/test_sandbox.out test/test_transport.out
+TEST_TARGETS   = test/test_sandbox.out test/test_transport.out test/test_protocol.out
 COMMON_OBJS    = src/protocol.o src/transport.o src/utils.o
 OBJS           = src/sandbox.o src/container.o src/kvm.o
 HOST_OBJS      = src/uav.o
 AGENT_OBJS     = agent/uav-agent.o
-TEST_OBJS      = test/test_sandbox.o test/test_transport.o
+TEST_OBJS      = test/test_sandbox.o test/test_transport.o test/test_protocol.o
 
 all: $(HOST_TARGET) $(AGENT_TARGET) $(TEST_TARGETS)
 
 $(HOST_TARGET): $(HOST_OBJS) $(OBJS) $(COMMON_OBJS)
-	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) $(HOST_LDLIBS)
 
 $(AGENT_TARGET): $(AGENT_OBJS) $(COMMON_OBJS)
-	$(CC) -static $(LDFLAGS) -o $@ $^
+	$(CC) -static $(LDFLAGS) -o $@ $^ $(AGENT_LDLIBS)
 
 $(TEST_TARGETS): %.out: %.o $(OBJS) $(COMMON_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
