@@ -11,8 +11,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "config.h"
 #include "agent_protocol.h"
+#include "config.h"
 #include "sandbox.h"
 #include "transport.h"
 #include "utils.h"
@@ -546,66 +546,35 @@ out:
 static int uav_setup_userns_mappings(pid_t pid, uid_t uid, gid_t gid) {
   char path[PATH_MAX];
   char mapping[256];
-  int fd = -1;
   int ret = -1;
-  int saved_errno;
 
   /* Write UID mapping: <inside-uid> <outside-uid> <count> */
   snprintf(path, sizeof(path), "/proc/%d/uid_map", pid);
-
-  fd = open(path, O_WRONLY);
-  if (fd < 0) goto out;
-
   snprintf(mapping, sizeof(mapping), "0 %d 1", uid);
-  ret = write(fd, mapping, strlen(mapping));
-  if (ret < 0) goto out;
 
-  close(fd);
-  fd = -1;
+  ret = uav_write_file(path, (const unsigned char*)mapping, strlen(mapping));
+  if (ret < 0) return ret;
 
   /* Disable setgroups before writing gid_map. */
   snprintf(path, sizeof(path), "/proc/%d/setgroups", pid);
-
-  fd = open(path, O_WRONLY);
-  if (fd >= 0) {
-    ret = write(fd, "deny", 4);
-    if (ret < 0) goto out;
-
-    close(fd);
-    fd = -1;
-  } else if (errno != ENOENT) {
-    /*
-     * setgroups may not exist on kernels/configurations where it
-     * isn't required/supported. Other errors are real failures.
-     */
-    goto out;
-  }
+  strcpy(mapping, "deny");
+  ret = uav_write_file(path, (const unsigned char*)mapping, strlen(mapping));
+  if (ret < 0) return ret;
 
   /* Write GID mapping. */
   snprintf(path, sizeof(path), "/proc/%d/gid_map", pid);
-
-  fd = open(path, O_WRONLY);
-  if (fd < 0) goto out;
-
   snprintf(mapping, sizeof(mapping), "0 %d 1", gid);
-  ret = write(fd, mapping, strlen(mapping));
-  if (ret < 0) goto out;
-
-  ret = 0;
-
-out:
-  saved_errno = errno;
-
-  if (fd >= 0) close(fd);
-
-  errno = saved_errno;
-  return ret;
+  return uav_write_file(path, (const unsigned char*)mapping, strlen(mapping));
 }
 
 static int uav_sandbox_become_root(void) {
-  if (setresgid(0, 0, 0) < 0) return -1;
+  int ret;
 
-  if (setresuid(0, 0, 0) < 0) return -1;
+  ret = setresgid(0, 0, 0);
+  if (ret < 0) return -1;
+
+  ret = setresuid(0, 0, 0);
+  if (ret < 0) return -1;
 
   return 0;
 }

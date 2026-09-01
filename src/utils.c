@@ -223,3 +223,20 @@ int uav_fd_write_all(int fd, const void* buf, size_t size) {
 
   return 0;
 }
+
+int uav_write_file(const char* path, const unsigned char* data, size_t len) {
+  int fd = -1, ret = -1;
+  ssize_t written;
+
+  fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) goto cleanup;
+
+  written = write(fd, data, len);
+  if (written < 0 || (size_t)written != len) goto cleanup;
+
+  ret = 0;
+
+cleanup:
+  if (fd >= 0) close(fd);
+  return ret;
+}
