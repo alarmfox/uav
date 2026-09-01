@@ -15,7 +15,7 @@ TEST(test_run_sandbox_ns) {
   fd = mkstemp(path);
   TEST_ASSERT(fd >= 0);
 
-  ret = uav_fd_write_all(fd, program, strlen(program) + 1);
+  ret = uav_write_all(fd, program, strlen(program) + 1);
   TEST_ASSERT_EQ(0, ret);
   TEST_ASSERT_EQ(0, close(fd));
 

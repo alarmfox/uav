@@ -39,22 +39,22 @@ static int receive_upload(int fd, const uint8_t* expected, size_t size) {
       .ctx = &ctx,
   };
   struct uav_proto_msg msg;
-  struct uav_upload_meta meta;
-  uint8_t received[UAV_PROTO_MAX_CHUNK + 257];
+  struct uav_agent_upload_meta meta;
+  uint8_t received[UAV_AGENT_PROTO_MAX_CHUNK + 257];
   FILE* file;
   int ret = 1;
 
   file = tmpfile();
   if (file == NULL) goto out;
 
-  if (uav_proto_recv(&transport, &msg) < 0) goto close_file;
-  if (uav_proto_decode_upload_begin(&msg, &meta) < 0) goto close_file;
+  if (uav_agent_proto_recv(&transport, &msg) < 0) goto close_file;
+  if (uav_agent_proto_decode_upload_begin(&msg, &meta) < 0) goto close_file;
   if (meta.size != size || meta.source_mode != 0751 ||
-      meta.purpose != UAV_UPLOAD_EXECUTABLE)
+      meta.purpose != UAV_AGENT_UPLOAD_EXECUTABLE)
     goto close_file;
 
-  if (uav_proto_accept_upload(&transport) < 0) goto close_file;
-  if (uav_proto_receive_upload(&transport, fileno(file), meta.size) < 0)
+  if (uav_agent_proto_accept_upload(&transport) < 0) goto close_file;
+  if (uav_agent_proto_receive_upload(&transport, fileno(file), meta.size) < 0)
     goto close_file;
 
   if (lseek(fileno(file), 0, SEEK_SET) < 0) goto close_file;
@@ -62,7 +62,7 @@ static int receive_upload(int fd, const uint8_t* expected, size_t size) {
     goto close_file;
   if (memcmp(received, expected, size) != 0) goto close_file;
 
-  if (uav_proto_complete_upload(&transport) < 0) goto close_file;
+  if (uav_agent_proto_complete_upload(&transport) < 0) goto close_file;
   ret = 0;
 
 close_file:
@@ -91,14 +91,15 @@ TEST(test_protocol_status_messages) {
   first_ctx.fd = fds[0];
   second_ctx.fd = fds[1];
 
-  TEST_ASSERT_MSG(uav_proto_send_error(&first, EACCES) == 0, strerror(errno));
-  TEST_ASSERT_EQ(0, uav_proto_recv(&second, &msg));
-  TEST_ASSERT_EQ(0, uav_proto_decode_error(&msg, &value));
+  TEST_ASSERT_MSG(uav_agent_proto_send_error(&first, EACCES) == 0,
+                  strerror(errno));
+  TEST_ASSERT_EQ(0, uav_agent_proto_recv(&second, &msg));
+  TEST_ASSERT_EQ(0, uav_agent_proto_decode_error(&msg, &value));
   TEST_ASSERT_EQ(EACCES, value);
 
-  TEST_ASSERT_EQ(0, uav_proto_send_exit(&second, 42));
-  TEST_ASSERT_EQ(0, uav_proto_recv(&first, &msg));
-  TEST_ASSERT_EQ(0, uav_proto_decode_exit(&msg, &value));
+  TEST_ASSERT_EQ(0, uav_agent_proto_send_exit(&second, 42));
+  TEST_ASSERT_EQ(0, uav_agent_proto_recv(&first, &msg));
+  TEST_ASSERT_EQ(0, uav_agent_proto_decode_exit(&msg, &value));
   TEST_ASSERT_EQ(42, value);
 
   close(fds[0]);
@@ -108,29 +109,32 @@ TEST(test_protocol_status_messages) {
 
 TEST(test_protocol_rejects_bad_typed_payload) {
   struct uav_proto_msg msg = {
-      .type = UAV_MSG_UPLOAD_BEGIN,
-      .length = 1,
+      .header =
+          {
+              .type = UAV_AGENT_MSG_UPLOAD_BEGIN,
+              .length = 1,
+          },
   };
-  struct uav_upload_meta meta;
+  struct uav_agent_upload_meta meta;
 
-  TEST_ASSERT_EQ(-1, uav_proto_decode_upload_begin(&msg, &meta));
+  TEST_ASSERT_EQ(-1, uav_agent_proto_decode_upload_begin(&msg, &meta));
   TEST_ASSERT_EQ(EPROTO, errno);
-  TEST_ASSERT_EQ(-1, uav_proto_decode_exit(&msg, &(int){0}));
+  TEST_ASSERT_EQ(-1, uav_agent_proto_decode_exit(&msg, &(int){0}));
   TEST_ASSERT_EQ(EPROTO, errno);
   return 0;
 }
 
 TEST(test_protocol_streamed_upload) {
-  uint8_t data[UAV_PROTO_MAX_CHUNK + 257];
+  uint8_t data[UAV_AGENT_PROTO_MAX_CHUNK + 257];
   struct test_transport_ctx ctx;
   struct uav_transport transport = {
       .ops = &test_transport_ops,
       .ctx = &ctx,
   };
-  struct uav_upload_meta meta = {
+  struct uav_agent_upload_meta meta = {
       .size = sizeof(data),
       .source_mode = 0751,
-      .purpose = UAV_UPLOAD_EXECUTABLE,
+      .purpose = UAV_AGENT_UPLOAD_EXECUTABLE,
   };
   FILE* source;
   pid_t child;
@@ -141,7 +145,7 @@ TEST(test_protocol_streamed_upload) {
 
   source = tmpfile();
   TEST_ASSERT_NOT_NULL(source);
-  TEST_ASSERT_EQ(0, uav_fd_write_all(fileno(source), data, sizeof(data)));
+  TEST_ASSERT_EQ(0, uav_write_all(fileno(source), data, sizeof(data)));
   TEST_ASSERT_EQ(0, lseek(fileno(source), 0, SEEK_SET));
   TEST_ASSERT_EQ(0, socketpair(AF_UNIX, SOCK_STREAM, 0, fds));
 
@@ -155,8 +159,9 @@ TEST(test_protocol_streamed_upload) {
 
   close(fds[1]);
   ctx.fd = fds[0];
-  TEST_ASSERT_MSG(uav_proto_upload(&transport, fileno(source), &meta) == 0,
-                  strerror(errno));
+  TEST_ASSERT_MSG(
+      uav_agent_proto_upload(&transport, fileno(source), &meta) == 0,
+      strerror(errno));
   TEST_ASSERT_EQ(child, waitpid(child, &status, 0));
   TEST_ASSERT(WIFEXITED(status));
   TEST_ASSERT_EQ(0, WEXITSTATUS(status));

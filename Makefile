@@ -2,6 +2,7 @@ CPPFLAGS       = -Isrc/ -D_XOPEN_SOURCE=500 -D_POSIX_C_SOURCE=200809L -D_GNU_SOU
 CFLAGS         = -Wall -Wextra -std=c11 -fstack-protector-strong -fPIE
 LDFLAGS        = -pie -Wl,-z,relro,-z,now
 UAV_LDLIBS     = -larchive
+UAVD_LDLIBS    =
 AGENT_LDLIBS   = -lcap
 
 ifeq ($(DEBUG),1)
@@ -17,21 +18,30 @@ CFLAGS        += -Werror
 endif
 
 UAV_TARGET     = uav
+UAVD_TARGET    = uavd
 AGENT_TARGET   = uav-agent
-TEST_TARGETS   = test/test_sandbox.out test/test_transport.out test/test_agent_protocol.out
+TEST_TARGETS   = test/test_sandbox.out test/test_transport.out \
+                 test/test_agent_protocol.out test/test_daemon_protocol.out
 UAV_OBJS       = uav-cli/main.o src/sandbox.o src/container.o src/kvm.o \
-                 src/agent_protocol.o src/transport.o src/utils.o
-AGENT_OBJS     = agent/uav-agent.o src/agent_protocol.o src/transport.o \
+                 src/agent_protocol.o src/protocol_utils.o src/transport.o \
                  src/utils.o
+UAVD_OBJS      = uav-d/main.o src/daemon_protocol.o src/protocol_utils.o \
+                 src/transport.o src/utils.o
+AGENT_OBJS     = agent/uav-agent.o src/agent_protocol.o src/transport.o \
+                 src/protocol_utils.o src/utils.o
 TEST_OBJS      = src/sandbox.o src/container.o src/kvm.o \
-                 src/agent_protocol.o src/transport.o src/utils.o
+                 src/agent_protocol.o src/daemon_protocol.o \
+                 src/protocol_utils.o src/transport.o src/utils.o
 
 .PHONY: all test valgrind package-agent clean
 
-all: $(UAV_TARGET) $(AGENT_TARGET) $(TEST_TARGETS)
+all: $(UAV_TARGET) $(UAVD_TARGET) $(AGENT_TARGET) $(TEST_TARGETS)
 
 $(UAV_TARGET): $(UAV_OBJS)
-	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) $(UAV_LDLIBS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDFLAGS) $(UAV_LDLIBS)
+
+$(UAVD_TARGET): $(UAVD_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDFLAGS) $(UAVD_LDLIBS)
 
 $(AGENT_TARGET): $(AGENT_OBJS)
 	$(CC) -static $(LDFLAGS) -o $@ $^ $(AGENT_LDLIBS)
@@ -64,5 +74,5 @@ package-agent: $(AGENT_TARGET)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 clean:
-	$(RM) $(UAV_TARGET) $(AGENT_TARGET) $(TEST_TARGETS) \
-		uav-cli/*.o uavd/*.o agent/*.o src/*.o test/*.o
+	$(RM) $(UAV_TARGET) $(AGENT_TARGET) $(TEST_TARGETS) $(UAVD_TARGET) \
+		uav-cli/*.o uav-d/*.o agent/*.o src/*.o test/*.o

@@ -201,7 +201,7 @@ cleanup:
   return ret;
 }
 
-int uav_fd_write_all(int fd, const void* buf, size_t size) {
+int uav_write_all(int fd, const void* buf, size_t size) {
   const unsigned char* p = buf;
 
   while (size > 0) {
@@ -226,17 +226,20 @@ int uav_fd_write_all(int fd, const void* buf, size_t size) {
 
 int uav_write_file(const char* path, const unsigned char* data, size_t len) {
   int fd = -1, ret = -1;
+  int saved_errno;
   ssize_t written;
 
-  fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  fd = open(path, O_WRONLY, 0644);
   if (fd < 0) goto cleanup;
 
-  written = write(fd, data, len);
+  written = uav_write_all(fd, data, len);
   if (written < 0 || (size_t)written != len) goto cleanup;
 
   ret = 0;
 
 cleanup:
+  saved_errno = errno;
   if (fd >= 0) close(fd);
+  errno = saved_errno;
   return ret;
 }

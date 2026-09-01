@@ -131,23 +131,24 @@ int uav_sandbox_ns_create(struct uav_sandbox* s) {
   ret = uav_setup_userns_mappings(child, uid, gid);
   if (ret != 0) goto cleanup;
 
-  ret = uav_proto_send(s->trans, UAV_MSG_READY, NULL, 0);
+  ret = uav_agent_proto_send(s->trans, UAV_AGENT_MSG_READY, NULL, 0);
   if (ret < 0) goto cleanup;
 
-  ret = uav_proto_recv(s->trans, &msg);
+  ret = uav_agent_proto_recv(s->trans, &msg);
   if (ret < 0) goto cleanup;
 
-  if (msg.type == UAV_MSG_ERROR) {
+  if (msg.header.type == UAV_AGENT_MSG_ERROR) {
     int remote_error;
 
     fprintf(stderr, "[UAV] child setup failed\n");
-    if (uav_proto_decode_error(&msg, &remote_error) == 0) errno = remote_error;
+    if (uav_agent_proto_decode_error(&msg, &remote_error) == 0)
+      errno = remote_error;
     ret = -1;
     goto cleanup;
   }
 
-  if (msg.type != UAV_MSG_READY) {
-    fprintf(stderr, "[UAV] unexpected child message: %u\n", msg.type);
+  if (msg.header.type != UAV_AGENT_MSG_READY) {
+    fprintf(stderr, "[UAV] unexpected child message: %u\n", msg.header.type);
     errno = EPROTO;
     ret = -1;
     goto cleanup;
@@ -188,7 +189,7 @@ int uav_sandbox_ns_run(const struct uav_sandbox* s, const char* program) {
   int fd = -1;
   int saved_errno;
   struct stat st;
-  struct uav_upload_meta meta;
+  struct uav_agent_upload_meta meta;
 
   if (s == NULL || program == NULL) {
     errno = EINVAL;
@@ -214,26 +215,26 @@ int uav_sandbox_ns_run(const struct uav_sandbox* s, const char* program) {
 
   meta.size = (uint32_t)st.st_size;
   meta.source_mode = (uint32_t)st.st_mode & 0777U;
-  meta.purpose = UAV_UPLOAD_EXECUTABLE;
+  meta.purpose = UAV_AGENT_UPLOAD_EXECUTABLE;
 
-  ret = uav_proto_upload(s->trans, fd, &meta);
+  ret = uav_agent_proto_upload(s->trans, fd, &meta);
   if (ret != 0) goto cleanup;
 
-  ret = uav_proto_send(s->trans, UAV_MSG_RUN, NULL, 0);
+  ret = uav_agent_proto_send(s->trans, UAV_AGENT_MSG_RUN, NULL, 0);
   if (ret != 0) goto cleanup;
 
   for (;;) {
     struct uav_proto_msg msg;
 
-    ret = uav_proto_recv(s->trans, &msg);
+    ret = uav_agent_proto_recv(s->trans, &msg);
     if (ret < 0) goto cleanup;
 
-    if (msg.type == UAV_MSG_EVENT) continue;
+    if (msg.header.type == UAV_AGENT_MSG_EVENT) continue;
 
-    if (msg.type == UAV_MSG_EXIT) {
+    if (msg.header.type == UAV_AGENT_MSG_EXIT) {
       int status;
 
-      if (uav_proto_decode_exit(&msg, &status) < 0) goto cleanup;
+      if (uav_agent_proto_decode_exit(&msg, &status) < 0) goto cleanup;
 
       if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         errno = EIO;
@@ -245,10 +246,10 @@ int uav_sandbox_ns_run(const struct uav_sandbox* s, const char* program) {
       break;
     }
 
-    if (msg.type == UAV_MSG_ERROR) {
+    if (msg.header.type == UAV_AGENT_MSG_ERROR) {
       int remote_error;
 
-      if (uav_proto_decode_error(&msg, &remote_error) == 0)
+      if (uav_agent_proto_decode_error(&msg, &remote_error) == 0)
         errno = remote_error;
       ret = -1;
       goto cleanup;
@@ -279,7 +280,8 @@ int uav_sandbox_ns_destroy(struct uav_sandbox* s) {
   }
 
   if (s->data.container.child > 0) {
-    if (s->trans && uav_proto_send(s->trans, UAV_MSG_EXIT, NULL, 0) == 0) {
+    if (s->trans &&
+        uav_agent_proto_send(s->trans, UAV_AGENT_MSG_EXIT, NULL, 0) == 0) {
       graceful_exit = 1;
     }
 
@@ -730,6 +732,7 @@ static int sandbox_entrypoint(void* ptr) {
   struct uav_sandbox_entrypoint_args* args = ptr;
   struct uav_transport* transport = NULL;
   struct uav_proto_msg msg;
+
   const char* err_msg = NULL;
   int ret;
 
@@ -740,8 +743,8 @@ static int sandbox_entrypoint(void* ptr) {
   if (transport == NULL) _exit(1);
 
   /* Wait for parent mapping */
-  ret = uav_proto_recv(transport, &msg);
-  if (ret < 0 || msg.type != UAV_MSG_READY) {
+  ret = uav_agent_proto_recv(transport, &msg);
+  if (ret < 0 || msg.header.type != UAV_AGENT_MSG_READY) {
     err_msg = "recv_msg: mappings not done";
     goto fail;
   }
@@ -784,7 +787,7 @@ fail: {
 
   fprintf(stderr, "[UAV] sandbox failure at %s: %s\n",
           err_msg ? err_msg : "unknown", strerror(saved_errno));
-  uav_proto_send_error(transport, saved_errno);
+  uav_agent_proto_send_error(transport, saved_errno);
   uav_transport_destroy(&transport);
   _exit(1);
 }

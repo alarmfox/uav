@@ -31,7 +31,7 @@ struct uav_agent_state {
   struct uav_transport* transport;
   pid_t program_pid;
   bool upload_ready;
-  enum uav_upload_purpose upload_purpose;
+  enum uav_agent_upload_purpose upload_purpose;
   char upload_path[PATH_MAX];
 };
 
@@ -130,7 +130,7 @@ static int uav_agent_setup(void) {
   if (agent.transport == NULL) return -1;
 
   /* Setup is complete. The host may start sending commands. */
-  return uav_proto_send(agent.transport, UAV_MSG_READY, NULL, 0);
+  return uav_agent_proto_send(agent.transport, UAV_AGENT_MSG_READY, NULL, 0);
 }
 
 static void uav_agent_cleanup(void) {
@@ -155,7 +155,7 @@ static void uav_agent_cleanup(void) {
 
 static int uav_agent_send_error(int error) {
   if (agent.transport == NULL) return -1;
-  return uav_proto_send_error(agent.transport, error);
+  return uav_agent_proto_send_error(agent.transport, error);
 }
 
 static int uav_agent_upload(const struct uav_proto_msg* begin) {
@@ -165,20 +165,20 @@ static int uav_agent_upload(const struct uav_proto_msg* begin) {
   int saved_errno;
   int ret = -1;
   mode_t effective_mode;
-  struct uav_upload_meta meta;
+  struct uav_agent_upload_meta meta;
 
   if (agent.program_pid > 0) {
     errno = EBUSY;
     return -1;
   }
 
-  if (uav_proto_decode_upload_begin(begin, &meta) < 0) return -1;
+  if (uav_agent_proto_decode_upload_begin(begin, &meta) < 0) return -1;
 
   switch (meta.purpose) {
-    case UAV_UPLOAD_EXECUTABLE:
+    case UAV_AGENT_UPLOAD_EXECUTABLE:
       effective_mode = 0555;
       break;
-    case UAV_UPLOAD_DATA:
+    case UAV_AGENT_UPLOAD_DATA:
       effective_mode = 0444;
       break;
     default:
@@ -193,8 +193,9 @@ static int uav_agent_upload(const struct uav_proto_msg* begin) {
   flags = fcntl(fd, F_GETFD);
   if (flags < 0 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0) goto out;
 
-  if (uav_proto_accept_upload(agent.transport) < 0) goto out;
-  if (uav_proto_receive_upload(agent.transport, fd, meta.size) < 0) goto out;
+  if (uav_agent_proto_accept_upload(agent.transport) < 0) goto out;
+  if (uav_agent_proto_receive_upload(agent.transport, fd, meta.size) < 0)
+    goto out;
 
   if (fchmod(fd, effective_mode) < 0) goto out;
 
@@ -204,7 +205,7 @@ static int uav_agent_upload(const struct uav_proto_msg* begin) {
   }
   fd = -1;
 
-  ret = uav_proto_complete_upload(agent.transport);
+  ret = uav_agent_proto_complete_upload(agent.transport);
   if (ret < 0) goto out;
 
   if (agent.upload_ready) unlink(agent.upload_path);
@@ -224,12 +225,13 @@ out:
 static int uav_agent_run(const struct uav_proto_msg* msg) {
   pid_t pid;
 
-  if (msg->length != 0) {
+  if (msg->header.length != 0) {
     errno = EPROTO;
     return -1;
   }
 
-  if (!agent.upload_ready || agent.upload_purpose != UAV_UPLOAD_EXECUTABLE) {
+  if (!agent.upload_ready ||
+      agent.upload_purpose != UAV_AGENT_UPLOAD_EXECUTABLE) {
     errno = ENOENT;
     return -1;
   }
@@ -284,26 +286,26 @@ static int uav_agent_check_program(void) {
   if (pid < 0) return -1;
 
   agent.program_pid = -1;
-  return uav_proto_send_exit(agent.transport, status);
+  return uav_agent_proto_send_exit(agent.transport, status);
 }
 
 static int uav_agent_dispatch(const struct uav_proto_msg* msg) {
-  switch (msg->type) {
-    case UAV_MSG_UPLOAD_BEGIN:
+  switch (msg->header.type) {
+    case UAV_AGENT_MSG_UPLOAD_BEGIN:
       return uav_agent_upload(msg);
 
-    case UAV_MSG_RUN:
+    case UAV_AGENT_MSG_RUN:
       return uav_agent_run(msg);
 
-    case UAV_MSG_KILL:
-      if (msg->length != 0) {
+    case UAV_AGENT_MSG_KILL:
+      if (msg->header.length != 0) {
         errno = EPROTO;
         return -1;
       }
       return uav_agent_kill();
 
-    case UAV_MSG_EXIT:
-      if (msg->length != 0) {
+    case UAV_AGENT_MSG_EXIT:
+      if (msg->header.length != 0) {
         errno = EPROTO;
         return -1;
       }
@@ -335,7 +337,7 @@ static int uav_agent_loop(void) {
     if (ret == 0) continue;
 
     if (fd.revents & POLLIN) {
-      if (uav_proto_recv(agent.transport, &msg) < 0) return -1;
+      if (uav_agent_proto_recv(agent.transport, &msg) < 0) return -1;
 
       ret = uav_agent_dispatch(&msg);
       if (ret < 0) return -1;

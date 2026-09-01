@@ -23,4 +23,7 @@ _Static_assert(UAV_SANDBOX_NS_STACK_SIZE % 16 == 0,
 _Static_assert(UAV_SANDBOX_NS_STACK_SIZE % 16 == 0,
                "sandbox guest memory size must preserve 16-byte alignment");
 
+#define UAV_UAVD_RUNTIME_DIR "/tmp/uavd"
+#define UAV_UAVD_CONTROL_PATH UAV_UAVD_RUNTIME_DIR "/control.sock"
+
 #endif  //! UAV_CONFIG_H
