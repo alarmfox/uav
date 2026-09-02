@@ -122,6 +122,7 @@ TEST(test_protocol_rejects_bad_typed_payload) {
   struct uav_proto_msg msg = {
       .header =
           {
+              .kind = UAV_PROTO_REQUEST,
               .type = UAV_AGENT_MSG_UPLOAD_BEGIN,
               .length = 1,
           },
@@ -130,6 +131,9 @@ TEST(test_protocol_rejects_bad_typed_payload) {
 
   TEST_ASSERT_EQ(-1, uav_agent_proto_decode_upload_begin(&msg, &meta));
   TEST_ASSERT_EQ(EPROTO, errno);
+
+  msg.header.kind = UAV_PROTO_EVENT;
+  msg.header.type = UAV_AGENT_MSG_PROGRAM_EXIT;
   TEST_ASSERT_EQ(-1,
                  uav_agent_proto_decode_program_exit(&msg, &(int){0}));
   TEST_ASSERT_EQ(EPROTO, errno);
@@ -188,6 +192,7 @@ TEST(test_protocol_run_rejects_invalid_payloads) {
   struct uav_proto_msg msg = {
       .header =
           {
+              .kind = UAV_PROTO_REQUEST,
               .type = UAV_AGENT_MSG_RUN,
               .length = 12,
           },
