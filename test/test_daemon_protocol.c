@@ -129,6 +129,47 @@ TEST(test_daemon_protocol_result) {
   return 0;
 }
 
+TEST(test_daemon_protocol_registration) {
+  struct test_transport_ctx client_ctx = {.fd = -1};
+  struct test_transport_ctx daemon_ctx = {.fd = -1};
+  struct uav_transport client = {
+      .ops = &test_transport_ops,
+      .ctx = &client_ctx,
+  };
+  struct uav_transport daemon = {
+      .ops = &test_transport_ops,
+      .ctx = &daemon_ctx,
+  };
+  struct uav_proto_msg msg;
+  int fds[2];
+
+  TEST_ASSERT_EQ(0, socketpair(AF_UNIX, SOCK_STREAM, 0, fds));
+  client_ctx.fd = fds[0];
+  daemon_ctx.fd = fds[1];
+
+  TEST_ASSERT_EQ(0, uav_daemon_proto_send_response(
+                        &daemon, UAV_DAEMON_MSG_REGISTER_AGENT, 0, NULL, 0));
+  TEST_ASSERT_EQ(0, uav_daemon_proto_register_agent(&client));
+  TEST_ASSERT_EQ(0, uav_daemon_proto_recv(&daemon, &msg));
+  TEST_ASSERT_EQ(UAV_PROTO_REQUEST, msg.header.kind);
+  TEST_ASSERT_EQ(UAV_DAEMON_MSG_REGISTER_AGENT, msg.header.type);
+  TEST_ASSERT_EQ(0, msg.header.length);
+
+  TEST_ASSERT_EQ(0, uav_daemon_proto_send_response(
+                        &daemon, UAV_DAEMON_MSG_REGISTER_WORKLOAD, EBUSY, NULL,
+                        0));
+  TEST_ASSERT_EQ(-1, uav_daemon_proto_register_workload(&client));
+  TEST_ASSERT_EQ(EBUSY, errno);
+  TEST_ASSERT_EQ(0, uav_daemon_proto_recv(&daemon, &msg));
+  TEST_ASSERT_EQ(UAV_PROTO_REQUEST, msg.header.kind);
+  TEST_ASSERT_EQ(UAV_DAEMON_MSG_REGISTER_WORKLOAD, msg.header.type);
+  TEST_ASSERT_EQ(0, msg.header.length);
+
+  close(fds[0]);
+  close(fds[1]);
+  return 0;
+}
+
 TEST(test_protocols_reject_each_other) {
   struct test_transport_ctx first_ctx = {.fd = -1};
   struct test_transport_ctx second_ctx = {.fd = -1};
@@ -226,6 +267,7 @@ int main(void) {
 
   RUN_TEST(test_daemon_protocol_round_trip);
   RUN_TEST(test_daemon_protocol_result);
+  RUN_TEST(test_daemon_protocol_registration);
   RUN_TEST(test_protocols_reject_each_other);
   RUN_TEST(test_protocol_frame_validation);
   RUN_TEST(test_protocol_reports_transport_failure);

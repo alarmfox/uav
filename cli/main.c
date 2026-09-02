@@ -11,19 +11,22 @@
 /* ========================= Sandbox =========================*/
 
 static void print_sandbox_run_help(void) {
-  printf("Usage: uav sandbox run --seconds <seconds> <program>\n\n");
+  printf("Usage: uav sandbox run [options] <program>\n\n");
   printf("Run a program in an isolated environment.\n\n");
   printf("Options:\n");
   printf(
       "  -b, --backend <backend> Isolation technology. 'container' or 'kvm' "
       "allowed\n");
-  printf("  -t, --seconds <seconds> Maximum execution time\n");
+  printf(
+      "  -t, --seconds <seconds> Maximum execution time (disabled by "
+      "default)\n");
   printf("  -h, --help              Show this help message\n\n");
   printf("Arguments:\n");
   printf("  program                 Program to execute in sandbox\n");
   printf(
       "                          If omitted, drops into interactive shell\n\n");
   printf("Examples:\n");
+  printf("  uav sandbox run suspicious.sh\n");
   printf("  uav sandbox run --seconds 30 suspicious.sh\n");
 }
 
@@ -89,11 +92,8 @@ static int cmd_sandbox_run(int argc, const char* argv[]) {
     }
   }
 
-  if (duration_seconds == 0 || optind >= argc) {
-    if (duration_seconds == 0)
-      fprintf(stderr, "[UAV] missing execution duration\n");
-    else
-      fprintf(stderr, "[UAV] missing program\n");
+  if (optind >= argc) {
+    fprintf(stderr, "[UAV] missing program\n");
     print_sandbox_run_help();
     return EXIT_FAILURE;
   }
@@ -124,8 +124,7 @@ static int cmd_sandbox_run(int argc, const char* argv[]) {
 
   ret = EXIT_SUCCESS;
 cleanup:
-  ret = uav_sandbox_destroy(&s);
-  if (ret < 0) {
+  if (uav_sandbox_destroy(&s) < 0) {
     fprintf(stderr, "[UAV] cannot destroy sandbox: %s\n", strerror(errno));
     ret = EXIT_FAILURE;
   }

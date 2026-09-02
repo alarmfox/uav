@@ -239,7 +239,7 @@ int uav_sandbox_ns_run(const struct uav_sandbox* s, const char* program,
   ret = uav_agent_proto_upload(s->trans, fd, &meta);
   if (ret != 0) goto cleanup;
 
-  if (params == NULL || duration_seconds == 0) {
+  if (params == NULL) {
     errno = EINVAL;
     goto cleanup;
   }
@@ -790,9 +790,9 @@ out:
   return ret;
 }
 
-static int uav_sandbox_exec_entrypoint(int control_fd, int uavd_fd) {
+static int uav_sandbox_exec_entrypoint(int control_fd, int daemon_fd) {
   char control_fd_string[32];
-  char uavd_fd_string[32];
+  char daemon_fd_string[32];
   int flags;
 
   flags = fcntl(control_fd, F_GETFD);
@@ -800,21 +800,21 @@ static int uav_sandbox_exec_entrypoint(int control_fd, int uavd_fd) {
 
   if (fcntl(control_fd, F_SETFD, flags & ~FD_CLOEXEC) < 0) return -1;
 
-  flags = fcntl(uavd_fd, F_GETFD);
+  flags = fcntl(daemon_fd, F_GETFD);
   if (flags < 0) return -1;
 
-  if (fcntl(uavd_fd, F_SETFD, flags & ~FD_CLOEXEC) < 0) return -1;
+  if (fcntl(daemon_fd, F_SETFD, flags & ~FD_CLOEXEC) < 0) return -1;
 
   snprintf(control_fd_string, sizeof(control_fd_string), "%d", control_fd);
-  snprintf(uavd_fd_string, sizeof(uavd_fd_string), "%d", uavd_fd);
+  snprintf(daemon_fd_string, sizeof(daemon_fd_string), "%d", daemon_fd);
 
   char* const envp[] = {"PATH=/bin:/sbin:/usr/bin:/usr/sbin", "TERM=xterm",
                         "HOME=/root", "PS1=(@\\h):\\w>", NULL};
 
   char* const argv[] = {"/sbin/uav-agent", "--control-fd", control_fd_string,
-                        "--uavd-fd",       uavd_fd_string, NULL};
+                        "--daemon-fd",       daemon_fd_string, NULL};
 
-  execve("/sbin/uava", argv, envp);
+  execve("/sbin/uav-agent", argv, envp);
 
   return -1;
 }
@@ -823,7 +823,6 @@ static int sandbox_entrypoint(void* ptr) {
   struct uav_sandbox_entrypoint_args* args = ptr;
   struct uav_transport* control_transport = NULL;
   struct uav_transport* uavd_transport = NULL;
-  struct uav_proto_msg uavd_msg;
   struct uav_proto_msg msg;
 
   const char* err_msg = NULL;
@@ -880,17 +879,9 @@ static int sandbox_entrypoint(void* ptr) {
     goto fail;
   }
 
-  ret = uav_daemon_proto_send_request(uavd_transport,
-                                      UAV_DAEMON_MSG_REGISTER_AGENT, NULL, 0);
-  if (ret != 0) {
-    err_msg = "register agent request";
-    goto fail;
-  }
-
-  ret = uav_daemon_proto_recv(uavd_transport, &uavd_msg);
-  if (ret != 0 || uavd_msg.header.kind != UAV_PROTO_RESPONSE ||
-      uavd_msg.header.type != UAV_DAEMON_MSG_REGISTER_AGENT) {
-    err_msg = "register agent response";
+  ret = uav_daemon_proto_register_agent(uavd_transport);
+  if (ret < 0) {
+    err_msg = "register agent";
     goto fail;
   }
 

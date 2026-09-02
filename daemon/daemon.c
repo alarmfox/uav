@@ -1,3 +1,5 @@
+#include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <poll.h>
@@ -44,17 +46,192 @@ static void on_shutdown_requested(int signal_number) {
   __atomic_store_n(&g_shutdown_requested, 1, __ATOMIC_RELAXED);
 }
 
+static int uavd_peek_sender_credentials(int fd, struct ucred *credentials) {
+  unsigned char byte;
+  struct iovec iov = {
+    .iov_base = &byte,
+    .iov_len = sizeof(byte),
+  };
+  union {
+    struct cmsghdr align;
+    unsigned char bytes[CMSG_SPACE(sizeof(struct ucred))];
+  } control;
+  struct msghdr message;
+  struct cmsghdr *cmsg;
+  ssize_t received;
+
+  for (;;) {
+    memset(&message, 0, sizeof(message));
+    memset(&control, 0, sizeof(control));
+
+    message.msg_iov = &iov;
+    message.msg_iovlen = 1;
+    message.msg_control = control.bytes;
+    message.msg_controllen = sizeof(control.bytes);
+
+    received = recvmsg(fd, &message, MSG_PEEK);
+    if (received < 0 && errno == EINTR)
+      continue;
+    break;
+  }
+
+  if (received < 0)
+    return -1;
+
+  if (received == 0) {
+    errno = ECONNRESET;
+    return -1;
+  }
+
+  if (message.msg_flags & MSG_CTRUNC) {
+    errno = EPROTO;
+    return -1;
+  }
+
+  for (cmsg = CMSG_FIRSTHDR(&message);
+      cmsg != NULL;
+      cmsg = CMSG_NXTHDR(&message, cmsg)) {
+    if (cmsg->cmsg_level == SOL_SOCKET &&
+        cmsg->cmsg_type == SCM_CREDENTIALS &&
+        cmsg->cmsg_len >= CMSG_LEN(sizeof(*credentials))) {
+      memcpy(credentials, CMSG_DATA(cmsg), sizeof(*credentials));
+      return 0;
+    }
+  }
+
+  errno = EPROTO;
+  return -1;
+}
+
+static int uavd_remove_cgroup(const char* path) {
+  if (rmdir(path) == 0 || errno == ENOENT) return 0;
+
+  fprintf(stderr, "[UAVD] failed to remove cgroup %s: %s\n", path,
+          strerror(errno));
+  return -1;
+}
+
+static int uavd_is_sandbox_cgroup(const char* name) {
+  static const char prefix[] = "sandbox-";
+  const unsigned char* digit;
+
+  if (strncmp(name, prefix, sizeof(prefix) - 1) != 0) return 0;
+
+  digit = (const unsigned char*)name + sizeof(prefix) - 1;
+  if (*digit == '\0') return 0;
+
+  while (*digit != '\0') {
+    if (!isdigit(*digit)) return 0;
+    ++digit;
+  }
+
+  return 1;
+}
+
+static int uavd_remove_sandbox_cgroup(const char* root, const char* name) {
+  static const unsigned char kill_value[] = "1";
+  char path[PATH_MAX];
+  int ret = 0;
+
+  if (snprintf(path, sizeof(path), "%s/%s/cgroup.kill", root, name) >=
+      (int)sizeof(path)) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+
+  if (uav_write_file(path, kill_value, sizeof(kill_value) - 1) < 0 &&
+      errno != ENOENT) {
+    fprintf(stderr, "[UAVD] failed to kill cgroup %s: %s\n", name,
+            strerror(errno));
+    ret = -1;
+  }
+
+  if (snprintf(path, sizeof(path), "%s/%s/workload", root, name) >=
+      (int)sizeof(path)) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+  if (uavd_remove_cgroup(path) < 0) ret = -1;
+
+  if (snprintf(path, sizeof(path), "%s/%s/agent", root, name) >=
+      (int)sizeof(path)) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+  if (uavd_remove_cgroup(path) < 0) ret = -1;
+
+  if (snprintf(path, sizeof(path), "%s/%s", root, name) >=
+      (int)sizeof(path)) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+  if (uavd_remove_cgroup(path) < 0) ret = -1;
+
+  return ret;
+}
+
+static int uavd_cleanup_cgroup_hierarchy(void) {
+  static const char root[] = "/sys/fs/cgroup/" UAV_UAVD_ROOT_CGROUP_NAME;
+  char path[PATH_MAX];
+  char pid[32];
+  struct dirent* entry;
+  DIR* directory;
+  int ret = 0;
+  int saved_errno;
+
+  directory = opendir(root);
+  if (directory == NULL) return errno == ENOENT ? 0 : -1;
+
+  errno = 0;
+  while ((entry = readdir(directory)) != NULL) {
+    if (!uavd_is_sandbox_cgroup(entry->d_name)) continue;
+    if (uavd_remove_sandbox_cgroup(root, entry->d_name) < 0) ret = -1;
+    errno = 0;
+  }
+  if (errno != 0) ret = -1;
+
+  saved_errno = errno;
+  if (closedir(directory) < 0) ret = -1;
+  if (ret < 0 && saved_errno != 0) errno = saved_errno;
+
+  snprintf(pid, sizeof(pid), "%d", getpid());
+  if (uav_write_file("/sys/fs/cgroup/cgroup.procs",
+                     (const unsigned char*)pid, strlen(pid)) < 0) {
+    fprintf(stderr, "[UAVD] failed to leave cgroup hierarchy: %s\n",
+            strerror(errno));
+    ret = -1;
+  }
+
+  if (snprintf(path, sizeof(path), "%s/daemon", root) >= (int)sizeof(path)) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+  if (uavd_remove_cgroup(path) < 0) ret = -1;
+  if (uavd_remove_cgroup(root) < 0) ret = -1;
+
+  return ret;
+}
+
 static int uavd_init_cgroup_hierarchy(void) {
   char path[PATH_MAX];
   char controllers[64];
   int ret = -1;
+
+  /* Create root sandbox cgroup. The cgroup will have this structure
+   *
+   * /uav
+   * --/daemon
+   * --/sandbox-<id>
+   * ----/agent
+   * ----/workload
+   * */
 
   /* Create root cgroup and uavd dedicated cgroup */
   snprintf(path, sizeof(path), "/sys/fs/cgroup/%s", UAV_UAVD_ROOT_CGROUP_NAME);
   ret = mkdir(path, 0755);
   if (ret != 0 && errno != EEXIST) return ret;
 
-  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/uavd",
+  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/daemon",
            UAV_UAVD_ROOT_CGROUP_NAME);
   ret = mkdir(path, 0755);
   if (ret != 0 && errno != EEXIST) return ret;
@@ -81,7 +258,7 @@ static int uavd_add_pid_to_cgroup(const char* cgroup, pid_t pid) {
 
   snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/%s/cgroup.procs",
            UAV_UAVD_ROOT_CGROUP_NAME, cgroup);
-  snprintf(buffer, sizeof(buffer), "%d\n", pid);
+  snprintf(buffer, sizeof(buffer), "%d", pid);
 
   return uav_write_file(path, (const unsigned char*)buffer, strlen(buffer));
 }
@@ -208,8 +385,8 @@ static int uavd_init(void) {
   ret = uavd_init_cgroup_hierarchy();
   if (ret != 0) return ret;
 
-  /* Move ourselves to uav/uavd cgroup */
-  ret = uavd_add_pid_to_cgroup("uavd", getpid());
+  /* Move ourselves to uav/daemoncgroup */
+  ret = uavd_add_pid_to_cgroup("daemon", getpid());
   if (ret != 0) return ret;
 
   ret = uavd_setup_socket();
@@ -235,14 +412,6 @@ static int handle_register_agent(pid_t pid) {
     return -1;
   }
 
-  /* Create root sandbox cgroup. The cgroup will have this structure
-   *
-   * /uav
-   * --/uavd
-   * --/sandbox-<id>
-   * ----/agent
-   * ----/workload
-   * */
   snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/%s",
            UAV_UAVD_ROOT_CGROUP_NAME, cgroup);
   ret = mkdir(path, 0755);
@@ -263,7 +432,17 @@ static int handle_register_agent(pid_t pid) {
   return uavd_add_pid_to_cgroup(path, pid);
 }
 
-static int handle_register_workload(void) { return 0; }
+static int handle_register_workload(pid_t pid) {
+  char cgroup[64];
+
+  if (snprintf(cgroup, sizeof(cgroup), "sandbox-%" PRIu64 "/workload",
+               uavd.sandbox.id) >= (int)sizeof(cgroup)) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+
+  return uavd_add_pid_to_cgroup(cgroup, pid);
+}
 
 static int handle_client(int fd) {
   int ret = -1;
@@ -272,8 +451,8 @@ static int handle_client(int fd) {
   int passcred_opt = 1;
   struct uav_transport* transport = NULL;
   struct uav_proto_msg msg;
-  struct ucred creds;
-  socklen_t len = sizeof(creds);
+  struct ucred peer_creds, sender_creds;
+  socklen_t len = sizeof(sender_creds);
 
   ret = setsockopt(fd, SOL_SOCKET, SO_PASSCRED, &passcred_opt, sizeof(int));
   if (ret != 0) {
@@ -281,7 +460,7 @@ static int handle_client(int fd) {
     goto cleanup;
   }
 
-  ret = getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &creds, &len);
+  ret = getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer_creds, &len);
   if (ret != 0) {
     fprintf(stderr, "[UAVD] error: failed to get credentials\n");
     goto cleanup;
@@ -289,12 +468,14 @@ static int handle_client(int fd) {
 
   transport = uav_fd_transport_create(fd);
   if (transport == NULL) goto cleanup;
-  fd = -1;
 
-  printf("[UAVD] connected client pid=%d uid=%d gid=%d\n", creds.pid, creds.uid,
-         creds.gid);
+  printf("[UAVD] connected client pid=%d uid=%d gid=%d\n", peer_creds.pid, peer_creds.uid,
+         peer_creds.gid);
 
   while (1) {
+    ret = uavd_peek_sender_credentials(fd, &sender_creds);
+    if (ret != 0) goto cleanup;
+
     ret = uav_daemon_proto_recv(transport, &msg);
     if (ret != 0) goto cleanup;
 
@@ -304,20 +485,24 @@ static int handle_client(int fd) {
     } else {
       switch (msg.header.type) {
         case UAV_DAEMON_MSG_REGISTER_AGENT:
-          if (msg.header.length != 0)
-            request_error = EPROTO;
-          else if (handle_register_agent(creds.pid) < 0)
-            request_error = errno;
+          /*
+           * Initial registration must come from the process that established
+           * the connection.
+           */
+          if (sender_creds.pid != peer_creds.pid)
+            request_error = EACCES;
+          else
+            request_error =
+              handle_register_agent(sender_creds.pid) < 0 ? errno : 0;
           break;
+
         case UAV_DAEMON_MSG_REGISTER_WORKLOAD:
-          if (msg.header.length != 0)
-            request_error = EPROTO;
-          else if (handle_register_workload() < 0)
-            request_error = errno;
+          request_error =
+            handle_register_workload(sender_creds.pid) < 0 ? errno : 0;
           break;
-        default:
-          request_error = EPROTO;
-          break;
+      default:
+        request_error = EPROTO;
+        break;
       }
     }
 
@@ -362,6 +547,7 @@ static int uavd_loop(void) {
 }
 
 int main(void) {
+  int initialized = 0;
   int ret = 1;
 
   signal(SIGINT, &on_shutdown_requested);
@@ -372,6 +558,7 @@ int main(void) {
     fprintf(stderr, "[UAVD] cannot init: %s\n", strerror(errno));
     goto cleanup;
   }
+  initialized = 1;
   printf("[UAVD] ready. Listening on %s\n", UAV_UAVD_CONTROL_PATH);
 
   ret = uavd_loop();
@@ -386,6 +573,11 @@ cleanup:
     close(uavd.socket_fd);
     uavd.socket_fd = -1;
     unlink(UAV_UAVD_CONTROL_PATH);
+  }
+
+  if (initialized && uavd_cleanup_cgroup_hierarchy() < 0) {
+    fprintf(stderr, "[UAVD] failed to clean up cgroup hierarchy\n");
+    ret = -1;
   }
 
   if (ret != 0)

@@ -49,7 +49,7 @@ int uav_sandbox_run_program_for(const struct uav_sandbox* s,
                                 const char* program,
                                 const struct uav_agent_exec_params* params,
                                 uint32_t duration_seconds) {
-  if (s == NULL || program == NULL || params == NULL || duration_seconds == 0) {
+  if (s == NULL || program == NULL || params == NULL) {
     errno = EINVAL;
     return -1;
   }

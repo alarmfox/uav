@@ -28,4 +28,7 @@ int uav_daemon_proto_decode_response(const struct uav_proto_msg* msg,
                                      const uint8_t** body,
                                      uint32_t* body_length);
 
+int uav_daemon_proto_register_agent(struct uav_transport* transport);
+int uav_daemon_proto_register_workload(struct uav_transport* transport);
+
 #endif  // !UAV_DAEMON_PROTOCOL_H

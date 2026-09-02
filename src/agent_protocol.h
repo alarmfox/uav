@@ -7,7 +7,7 @@
 #include "protocol_utils.h"
 
 #define UAV_AGENT_PROTO_MAGIC 0x55415653u /* "UAVS" */
-#define UAV_AGENT_PROTO_VERSION 3
+#define UAV_AGENT_PROTO_VERSION 0
 #define UAV_AGENT_PROTO_MAX_CHUNK (8 * 1024)
 #define UAV_AGENT_PROTO_MAX_EXEC_ENTRIES 4096U
 
@@ -76,6 +76,7 @@ int uav_agent_proto_decode_response(const struct uav_proto_msg* msg,
                                     const uint8_t** body,
                                     uint32_t* body_length);
 
+/* A duration of zero disables the execution timeout. */
 int uav_agent_proto_send_run(struct uav_transport* transport,
                              const struct uav_agent_exec_params* params,
                              uint32_t duration_seconds);

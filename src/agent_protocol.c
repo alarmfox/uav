@@ -183,11 +183,6 @@ int uav_agent_proto_send_run(struct uav_transport* transport,
     return -1;
   }
 
-  if (duration_seconds == 0) {
-    errno = EINVAL;
-    return -1;
-  }
-
   if (uav_agent_proto_validate_run_params(params) < 0) return -1;
 
   entries = params->argc + params->envc;
@@ -267,8 +262,7 @@ int uav_agent_proto_decode_run(const struct uav_proto_msg* msg,
   argc = uav_proto_get_u32(msg->payload + 8);
   envc = uav_proto_get_u32(msg->payload + 12);
 
-  if ((flags & ~UAV_AGENT_EXEC_FLAG_MASK) != 0 ||
-      request->duration_seconds == 0 || argc == 0 ||
+  if ((flags & ~UAV_AGENT_EXEC_FLAG_MASK) != 0 || argc == 0 ||
       envc > UAV_AGENT_PROTO_MAX_EXEC_ENTRIES ||
       argc > UAV_AGENT_PROTO_MAX_EXEC_ENTRIES - envc) {
     errno = EPROTO;

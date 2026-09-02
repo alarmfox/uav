@@ -21,6 +21,7 @@ RUN apk add --no-cache \
 COPY --from=build /src/uav /sbin/uav
 COPY --from=build /src/uav-daemon /sbin/uav-daemon
 COPY --from=build /src/uav-agent /sbin/uav-agent
+COPY --from=build /src/test/*.out /usr/local/bin/
 RUN mkdir -p /etc/init.d
 RUN <<'EOF' cat > /etc/init.d/rcS
 #!/bin/sh

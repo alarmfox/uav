@@ -180,6 +180,13 @@ TEST(test_protocol_run_round_trip) {
   TEST_ASSERT_STR_EQ("TERM=xterm", request.envp[1]);
 
   uav_agent_proto_free_run(&request);
+
+  TEST_ASSERT_EQ(0, uav_agent_proto_send_run(&sender, &params, 0));
+  TEST_ASSERT_EQ(0, uav_agent_proto_recv(&receiver, &msg));
+  TEST_ASSERT_EQ(0, uav_agent_proto_decode_run(&msg, &request));
+  TEST_ASSERT_EQ(0, request.duration_seconds);
+  uav_agent_proto_free_run(&request);
+
   close(fds[0]);
   close(fds[1]);
   return 0;
@@ -297,9 +304,6 @@ TEST(test_protocol_run_sender_validation) {
   TEST_ASSERT_EQ(EINVAL, errno);
 
   params.argv = argv;
-  TEST_ASSERT_EQ(-1, uav_agent_proto_send_run(&transport, &params, 0));
-  TEST_ASSERT_EQ(EINVAL, errno);
-
   params.flags = 2;
   TEST_ASSERT_EQ(-1, uav_agent_proto_send_run(&transport, &params, 1));
   TEST_ASSERT_EQ(EINVAL, errno);

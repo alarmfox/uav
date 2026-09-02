@@ -31,7 +31,7 @@ TEST(test_run_sandbox_ns) {
   ret = uav_sandbox_create(&s, UAV_SANDBOX_BACKEND_CONTAINER);
   TEST_ASSERT_EQ(0, ret);
 
-  run_ret = uav_sandbox_run_program_for(&s, path, &params, 1);
+  run_ret = uav_sandbox_run_program_for(&s, path, &params, 0);
   destroy_ret = uav_sandbox_destroy(&s);
   unlink(path);
 

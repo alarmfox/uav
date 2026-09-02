@@ -49,6 +49,7 @@ struct uav_sandbox {
 };
 
 int uav_sandbox_create(struct uav_sandbox* s, enum uav_sandbox_backend type);
+/* A duration of zero disables the execution timeout. */
 int uav_sandbox_run_program_for(const struct uav_sandbox* s,
                                 const char* program,
                                 const struct uav_agent_exec_params* params,

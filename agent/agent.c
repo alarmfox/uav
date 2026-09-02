@@ -15,11 +15,11 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 
 #include "agent_protocol.h"
+#include "daemon_protocol.h"
 #include "transport.h"
 
 #define UAV_AGENT_DIR "/run/uav"
@@ -39,6 +39,7 @@ struct uav_agent_state {
 
 static struct uav_agent_state agent = {
     .control_fd = -1,
+    .daemon_fd = -1,
     .control_transport = NULL,
     .program_pid = -1,
     .program_deadline_ms = 0,
@@ -73,7 +74,7 @@ static void print_help(void) {
 static int uav_agent_parse_options(int argc, char* const argv[]) {
   static const struct option long_options[] = {
       {"control-fd", required_argument, NULL, 'f'},
-      {"daemon-fd", required_argument, NULL, 'f'},
+      {"daemon-fd", required_argument, NULL, 'd'},
       {"help", no_argument, NULL, 'h'},
       {NULL, 0, NULL, 0}};
   char* end;
@@ -125,21 +126,12 @@ static int uav_agent_parse_options(int argc, char* const argv[]) {
 }
 
 static int uav_configure_fd(int fd) {
-  struct termios termios;
   int flags;
 
   flags = fcntl(fd, F_GETFD);
   if (flags < 0) return -1;
 
-  if (fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0) return -1;
-
-  if (isatty(fd)) {
-    if (tcgetattr(fd, &termios) < 0) return -1;
-    cfmakeraw(&termios);
-    if (tcsetattr(fd, TCSANOW, &termios) < 0) return -1;
-  }
-
-  return 0;
+  return fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
 }
 
 static int uav_agent_setup(void) {
@@ -277,18 +269,22 @@ static int uav_agent_run(const struct uav_proto_msg* msg) {
 
   if (uav_agent_proto_decode_run(msg, &request) < 0) return -1;
 
-  duration_ms = (uint64_t)request.duration_seconds * 1000;
-  if (uav_agent_get_monotonic_ms(&now_ms) < 0) {
-    int saved_errno = errno;
+  now_ms = 0;
+  duration_ms = 0;
+  if (request.duration_seconds != 0) {
+    duration_ms = (uint64_t)request.duration_seconds * 1000;
+    if (uav_agent_get_monotonic_ms(&now_ms) < 0) {
+      int saved_errno = errno;
 
-    uav_agent_proto_free_run(&request);
-    errno = saved_errno;
-    return -1;
-  }
-  if (now_ms > UINT64_MAX - duration_ms) {
-    uav_agent_proto_free_run(&request);
-    errno = EOVERFLOW;
-    return -1;
+      uav_agent_proto_free_run(&request);
+      errno = saved_errno;
+      return -1;
+    }
+    if (now_ms > UINT64_MAX - duration_ms) {
+      uav_agent_proto_free_run(&request);
+      errno = EOVERFLOW;
+      return -1;
+    }
   }
 
   pid = fork();
@@ -298,10 +294,30 @@ static int uav_agent_run(const struct uav_proto_msg* msg) {
   }
 
   if (pid == 0) {
-    /* The analyzed program must not inherit the agent's control channel. */
-    close(agent.control_fd);
+    /*
+     * Do setup while still in the agent cgroup, so these operations are not
+     * attributed to the untrusted workload.
+     */
+    if (uav_agent_drop_capabilities() != 0)
+      _exit(126);
 
-    if (uav_agent_drop_capabilities() != 0) _exit(126);
+    /*
+     * send() is sufficient. SO_PASSCRED causes the kernel to attach this
+     * process's SCM_CREDENTIALS.
+     */
+    if (uav_daemon_proto_register_workload(agent.daemon_transport) < 0)
+      _exit(125);
+
+    /*
+     * Closes only the child's descriptor. The agent's descriptor remains
+     * open because fork() created a separate descriptor table.
+     */
+    uav_transport_destroy(&agent.daemon_transport);
+    agent.daemon_fd = -1;
+
+    uav_transport_destroy(&agent.control_transport);
+    agent.control_fd = -1;
+
 
     execve(agent.upload_path, request.argv, request.envp);
     _exit(127);
@@ -309,7 +325,7 @@ static int uav_agent_run(const struct uav_proto_msg* msg) {
 
   uav_agent_proto_free_run(&request);
   agent.program_pid = pid;
-  agent.program_deadline_ms = now_ms + duration_ms;
+  agent.program_deadline_ms = duration_ms == 0 ? 0 : now_ms + duration_ms;
   agent.program_timed_out = 0;
   return uav_agent_proto_send_response(agent.control_transport, UAV_AGENT_MSG_RUN, 0,
                                        NULL, 0);
@@ -401,6 +417,12 @@ static int uav_agent_get_poll_timeout(int* timeout) {
 
   if (agent.program_pid <= 0) {
     *timeout = -1;
+    return 0;
+  }
+
+  /* Keep polling so an untimed child is still reaped promptly. */
+  if (agent.program_deadline_ms == 0) {
+    *timeout = 100;
     return 0;
   }
 
@@ -554,12 +576,15 @@ int main(int argc, char* argv[]) {
     return EXIT_FAILURE;
   }
 
+  printf("[UAV-AGENT] starting\n");
+
   if (uav_agent_setup() < 0) {
     int saved_errno = errno;
     fprintf(stderr, "[UAV-AGENT] setup failed: %s\n", strerror(saved_errno));
     uav_agent_cleanup();
     return EXIT_FAILURE;
   }
+  printf("[UAV-AGENT] starting complete\n");
 
   if (uav_agent_loop() < 0) {
     int saved_errno = errno;
