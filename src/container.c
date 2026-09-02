@@ -65,7 +65,7 @@ int uav_sandbox_ns_create(struct uav_sandbox* s) {
     goto cleanup;
   }
 
-  s->data.container.stack = uav_malloc(UAV_SANDBOX_NS_STACK_SIZE);
+  s->data.container.stack = uav_malloc(UAV_SANDBOX_CONTAINER_STACK_SIZE);
 
   /* Prepare OverlayFS directories. */
   for (size_t i = 0; i < 4; ++i) {
@@ -102,7 +102,7 @@ int uav_sandbox_ns_create(struct uav_sandbox* s) {
   args->control_fd = control_fd[1];
 
   child = clone(sandbox_entrypoint,
-                (char*)s->data.container.stack + UAV_SANDBOX_NS_STACK_SIZE,
+                (char*)s->data.container.stack + UAV_SANDBOX_CONTAINER_STACK_SIZE,
                 CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWNET |
                     CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWCGROUP | SIGCHLD,
                 args);

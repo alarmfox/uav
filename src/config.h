@@ -15,12 +15,12 @@ _Static_assert(sizeof(UAV_SANDBOX_DIR) + sizeof("/uav_sandbox_XXXXXX") <
 
 #define UAV_SANDBOX_KERNEL_PATH "linux-7.1-minimal"
 
-#define UAV_SANDBOX_NS_STACK_SIZE (1024 * 1024)
-_Static_assert(UAV_SANDBOX_NS_STACK_SIZE % 16 == 0,
+#define UAV_SANDBOX_CONTAINER_STACK_SIZE (1024 * 1024)
+_Static_assert(UAV_SANDBOX_CONTAINER_STACK_SIZE % 16 == 0,
                "sandbox stack size must preserve 16-byte alignment");
 
 #define UAV_SANDBOX_KVM_GUEST_RAM (1024 * 1024 * 32)
-_Static_assert(UAV_SANDBOX_NS_STACK_SIZE % 16 == 0,
+_Static_assert(UAV_SANDBOX_KVM_GUEST_RAM % 16 == 0,
                "sandbox guest memory size must preserve 16-byte alignment");
 
 #define UAV_UAVD_RUNTIME_DIR "/tmp/uavd"
