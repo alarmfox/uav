@@ -45,7 +45,7 @@ DOCKER_BUILDKIT=1 docker build \
 
 (
     cd "$initramfs_in"
-    find . -print0 | cpio --null -o --quiet --format=newc --owner=0:0 | gzip -n > "$initramfs_out"
+    find . -print0 | cpio --null -o --quiet --format=newc --owner=0:0 | gzip -n9 > "$initramfs_out"
 )
 
 qemu-system-x86_64 -m 128M \

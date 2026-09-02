@@ -51,7 +51,7 @@ install -Dm755 "$agent" "$work/sbin/uav-agent"
 
 (
     cd "$work"
-    find . -print0 | cpio --null -o --quiet --format=newc --owner=0:0 | gzip -9 > "$output"
+    find . -print0 | cpio --null -o --quiet --format=newc --owner=0:0 | gzip -n9 > "$output"
 )
 
 mv "$output" "$initramfs"
