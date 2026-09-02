@@ -1,5 +1,4 @@
 *.o
-bpf/vmlinux.h
 test/*.out
 
 # Include these directories and exclude everything else.
@@ -13,3 +12,5 @@ test/*.out
 !/uav-d
 !/Makefile
 !/README.md
+!/.dockerignore
+!/Dockerfile.qemu

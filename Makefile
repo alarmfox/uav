@@ -33,7 +33,7 @@ TEST_OBJS      = src/sandbox.o src/container.o src/kvm.o \
                  src/agent_protocol.o src/daemon_protocol.o \
                  src/protocol_utils.o src/transport.o src/utils.o
 
-.PHONY: all test valgrind package-agent clean
+.PHONY: all test valgrind package-agent run-qemu clean
 
 all: $(UAV_TARGET) $(UAVD_TARGET) $(AGENT_TARGET) $(TEST_TARGETS)
 
@@ -44,7 +44,7 @@ $(UAVD_TARGET): $(UAVD_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDFLAGS) $(UAVD_LDLIBS)
 
 $(AGENT_TARGET): $(AGENT_OBJS)
-	$(CC) -static $(LDFLAGS) -o $@ $^ $(AGENT_LDLIBS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(AGENT_LDLIBS)
 
 $(TEST_TARGETS): %.out: %.o $(TEST_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) $(UAV_LDLIBS)
@@ -70,6 +70,8 @@ valgrind: $(TEST_TARGETS)
 package-agent: $(AGENT_TARGET)
 	./scripts/package-agent.sh src/config.h $(AGENT_TARGET)
 
+run-qemu:
+	./scripts/run-qemu.sh src/config.h
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 

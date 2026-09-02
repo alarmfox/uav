@@ -1,0 +1,9 @@
+.git
+*.o
+uav
+uavd
+uav-agent
+test/*.out
+initramfs.cpio.gz
+linux-*
+build
