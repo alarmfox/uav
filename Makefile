@@ -18,16 +18,16 @@ CFLAGS        += -Werror
 endif
 
 UAV_TARGET     = uav
-UAVD_TARGET    = uavd
+UAVD_TARGET    = uav-daemon
 AGENT_TARGET   = uav-agent
 TEST_TARGETS   = test/test_sandbox.out test/test_transport.out \
                  test/test_agent_protocol.out test/test_daemon_protocol.out
-UAV_OBJS       = uav-cli/main.o src/sandbox.o src/container.o src/kvm.o \
+UAV_OBJS       = cli/main.o src/sandbox.o src/container.o src/kvm.o \
                  src/agent_protocol.o src/protocol_utils.o src/transport.o \
-                 src/utils.o
-UAVD_OBJS      = uav-d/main.o src/daemon_protocol.o src/protocol_utils.o \
+                 src/utils.o src/daemon_protocol.o
+UAVD_OBJS      = daemon/daemon.o src/daemon_protocol.o src/protocol_utils.o \
                  src/transport.o src/utils.o
-AGENT_OBJS     = agent/uav-agent.o src/agent_protocol.o src/transport.o \
+AGENT_OBJS     = agent/agent.o src/agent_protocol.o src/transport.o \
                  src/protocol_utils.o src/utils.o
 TEST_OBJS      = src/sandbox.o src/container.o src/kvm.o \
                  src/agent_protocol.o src/daemon_protocol.o \
@@ -72,9 +72,12 @@ package-agent: $(AGENT_TARGET)
 
 run-qemu:
 	./scripts/run-qemu.sh src/config.h
+
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
+format:
+	clang-format -style google -i src/*.c cli/*.c agent/*.c test/*.c src/*.h  test/*.h daemon/*.c
 clean:
 	$(RM) $(UAV_TARGET) $(AGENT_TARGET) $(TEST_TARGETS) $(UAVD_TARGET) \
-		uav-cli/*.o uav-d/*.o agent/*.o src/*.o test/*.o
+		daemon/*.o agent/*.o src/*.o test/*.o cli/*.o

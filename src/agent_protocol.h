@@ -60,17 +60,15 @@ struct uav_agent_exec_request {
 
 struct uav_transport;
 
-int uav_agent_proto_send_request(struct uav_transport* transport,
-                                 uint16_t type, const void* data,
-                                 uint32_t length);
+int uav_agent_proto_send_request(struct uav_transport* transport, uint16_t type,
+                                 const void* data, uint32_t length);
 int uav_agent_proto_send_response(struct uav_transport* transport,
                                   uint16_t request_type, int error,
                                   const void* body, uint32_t body_length);
 int uav_agent_proto_send_event(struct uav_transport* transport, uint16_t type,
                                const void* data, uint32_t length);
-int uav_agent_proto_send_stream(struct uav_transport* transport,
-                                uint16_t type, const void* data,
-                                uint32_t length);
+int uav_agent_proto_send_stream(struct uav_transport* transport, uint16_t type,
+                                const void* data, uint32_t length);
 int uav_agent_proto_recv(struct uav_transport* transport,
                          struct uav_proto_msg* msg);
 int uav_agent_proto_decode_response(const struct uav_proto_msg* msg,

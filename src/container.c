@@ -8,11 +8,13 @@
 #include <sys/mount.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include "agent_protocol.h"
 #include "config.h"
+#include "daemon_protocol.h"
 #include "sandbox.h"
 #include "transport.h"
 #include "utils.h"
@@ -27,6 +29,7 @@ static int uav_setup_userns_mappings(pid_t pid, uid_t uid, gid_t gid);
 static int uav_sandbox_become_root(void);
 static int uav_sandbox_setup_overlay(const struct uav_sandbox* s);
 static int uav_sandbox_prepare_runtime(const struct uav_sandbox* s);
+static int uav_sandbox_connect_to_uavd(void);
 static int uav_sandbox_pivot_root(const struct uav_sandbox* s);
 static int sandbox_entrypoint(void* ptr);
 
@@ -101,11 +104,12 @@ int uav_sandbox_ns_create(struct uav_sandbox* s) {
   args->host_fd = control_fd[0];
   args->control_fd = control_fd[1];
 
-  child = clone(sandbox_entrypoint,
-                (char*)s->data.container.stack + UAV_SANDBOX_CONTAINER_STACK_SIZE,
-                CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWNET |
-                    CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWCGROUP | SIGCHLD,
-                args);
+  child =
+      clone(sandbox_entrypoint,
+            (char*)s->data.container.stack + UAV_SANDBOX_CONTAINER_STACK_SIZE,
+            CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWNET |
+                CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWCGROUP | SIGCHLD,
+            args);
 
   if (child < 0) {
     fprintf(stderr, "[UAV] cannot clone: %s\n", strerror(errno));
@@ -250,9 +254,8 @@ int uav_sandbox_ns_run(const struct uav_sandbox* s, const char* program,
     int remote_error;
 
     if (uav_agent_proto_recv(s->trans, &msg) < 0 ||
-        uav_agent_proto_decode_response(&msg, UAV_AGENT_MSG_RUN,
-                                        &remote_error, &body,
-                                        &body_length) < 0 ||
+        uav_agent_proto_decode_response(&msg, UAV_AGENT_MSG_RUN, &remote_error,
+                                        &body, &body_length) < 0 ||
         body_length != 0) {
       errno = EPROTO;
       ret = -1;
@@ -279,8 +282,7 @@ int uav_sandbox_ns_run(const struct uav_sandbox* s, const char* program,
         msg.header.type == UAV_AGENT_MSG_PROGRAM_EXIT) {
       int status;
 
-      if (uav_agent_proto_decode_program_exit(&msg, &status) < 0)
-        goto cleanup;
+      if (uav_agent_proto_decode_program_exit(&msg, &status) < 0) goto cleanup;
 
       if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         errno = EIO;
@@ -317,9 +319,8 @@ int uav_sandbox_ns_destroy(struct uav_sandbox* s) {
   }
 
   if (s->data.container.child > 0) {
-    if (s->trans &&
-        uav_agent_proto_send_request(s->trans, UAV_AGENT_MSG_SHUTDOWN, NULL,
-                                     0) == 0) {
+    if (s->trans && uav_agent_proto_send_request(
+                        s->trans, UAV_AGENT_MSG_SHUTDOWN, NULL, 0) == 0) {
       struct uav_proto_msg msg;
       const uint8_t* body;
       uint32_t body_length;
@@ -725,6 +726,40 @@ out:
   return ret;
 }
 
+static int uav_sandbox_connect_to_uavd(void) {
+  const char* path = UAV_UAVD_CONTROL_PATH;
+  int fd = -1, ret = -1, saved_errno;
+  size_t path_len;
+  struct sockaddr_un address;
+
+  path_len = strlen(path);
+  if (path_len >= sizeof(address.sun_path)) {
+    errno = ENAMETOOLONG;
+    fprintf(stderr, "[UAVD] control socket path is too long\n");
+    goto cleanup;
+  }
+
+  fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+
+  if (fd < 0) return -1;
+
+  memset(&address, 0, sizeof(address));
+  address.sun_family = AF_UNIX;
+  memcpy(address.sun_path, path, path_len + 1);
+
+  ret =
+      connect(fd, (const struct sockaddr*)&address, sizeof(struct sockaddr_un));
+  if (ret != 0) goto cleanup;
+
+  ret = 0;
+cleanup:
+  saved_errno = errno;
+  if (ret != 0 && fd >= 0) close(fd);
+  errno = saved_errno;
+
+  return ret == 0 ? fd : -1;
+}
+
 static int uav_sandbox_pivot_root(const struct uav_sandbox* s) {
   char* newroot = NULL;
   char* oldroot = NULL;
@@ -755,8 +790,9 @@ out:
   return ret;
 }
 
-static int uav_sandbox_exec_entrypoint(int control_fd) {
-  char fd_string[32];
+static int uav_sandbox_exec_entrypoint(int control_fd, int uavd_fd) {
+  char control_fd_string[32];
+  char uavd_fd_string[32];
   int flags;
 
   flags = fcntl(control_fd, F_GETFD);
@@ -764,34 +800,43 @@ static int uav_sandbox_exec_entrypoint(int control_fd) {
 
   if (fcntl(control_fd, F_SETFD, flags & ~FD_CLOEXEC) < 0) return -1;
 
-  snprintf(fd_string, sizeof(fd_string), "%d", control_fd);
+  flags = fcntl(uavd_fd, F_GETFD);
+  if (flags < 0) return -1;
+
+  if (fcntl(uavd_fd, F_SETFD, flags & ~FD_CLOEXEC) < 0) return -1;
+
+  snprintf(control_fd_string, sizeof(control_fd_string), "%d", control_fd);
+  snprintf(uavd_fd_string, sizeof(uavd_fd_string), "%d", uavd_fd);
 
   char* const envp[] = {"PATH=/bin:/sbin:/usr/bin:/usr/sbin", "TERM=xterm",
                         "HOME=/root", "PS1=(@\\h):\\w>", NULL};
 
-  char* const argv[] = {"/sbin/uav-agent", "--control-fd", fd_string, NULL};
+  char* const argv[] = {"/sbin/uav-agent", "--control-fd", control_fd_string,
+                        "--uavd-fd",       uavd_fd_string, NULL};
 
-  execve("/sbin/uav-agent", argv, envp);
+  execve("/sbin/uava", argv, envp);
 
   return -1;
 }
 
 static int sandbox_entrypoint(void* ptr) {
   struct uav_sandbox_entrypoint_args* args = ptr;
-  struct uav_transport* transport = NULL;
+  struct uav_transport* control_transport = NULL;
+  struct uav_transport* uavd_transport = NULL;
+  struct uav_proto_msg uavd_msg;
   struct uav_proto_msg msg;
 
   const char* err_msg = NULL;
-  int ret;
+  int ret, uavd_fd;
 
   /* Close host side */
   close(args->host_fd);
 
-  transport = uav_fd_transport_create(args->control_fd);
-  if (transport == NULL) _exit(1);
+  control_transport = uav_fd_transport_create(args->control_fd);
+  if (control_transport == NULL) _exit(1);
 
   /* Wait for parent mapping */
-  ret = uav_agent_proto_recv(transport, &msg);
+  ret = uav_agent_proto_recv(control_transport, &msg);
   if (ret < 0 || msg.header.kind != UAV_PROTO_REQUEST ||
       msg.header.type != UAV_AGENT_MSG_START || msg.header.length != 0) {
     err_msg = "recv_msg: mappings not done";
@@ -822,13 +867,40 @@ static int sandbox_entrypoint(void* ptr) {
     goto fail;
   }
 
+  /* Register in the sandbox cgroup as sandbox */
+  uavd_fd = uav_sandbox_connect_to_uavd();
+  if (uavd_fd < 0) {
+    err_msg = "uavd connect";
+    goto fail;
+  }
+
+  uavd_transport = uav_fd_transport_create(uavd_fd);
+  if (uavd_transport == NULL) {
+    err_msg = "uavd transport create";
+    goto fail;
+  }
+
+  ret = uav_daemon_proto_send_request(uavd_transport,
+                                      UAV_DAEMON_MSG_REGISTER_AGENT, NULL, 0);
+  if (ret != 0) {
+    err_msg = "register agent request";
+    goto fail;
+  }
+
+  ret = uav_daemon_proto_recv(uavd_transport, &uavd_msg);
+  if (ret != 0 || uavd_msg.header.kind != UAV_PROTO_RESPONSE ||
+      uavd_msg.header.type != UAV_DAEMON_MSG_REGISTER_AGENT) {
+    err_msg = "register agent response";
+    goto fail;
+  }
+
   ret = uav_sandbox_pivot_root(args->s);
   if (ret < 0) {
     err_msg = "pivot root";
     goto fail;
   }
 
-  ret = uav_sandbox_exec_entrypoint(args->control_fd);
+  ret = uav_sandbox_exec_entrypoint(args->control_fd, uavd_fd);
   err_msg = "exec entrypoint";
 
 fail: {
@@ -836,9 +908,9 @@ fail: {
 
   fprintf(stderr, "[UAV] sandbox failure at %s: %s\n",
           err_msg ? err_msg : "unknown", strerror(saved_errno));
-  uav_agent_proto_send_response(transport, UAV_AGENT_MSG_START, saved_errno,
-                                NULL, 0);
-  uav_transport_destroy(&transport);
+  uav_agent_proto_send_response(control_transport, UAV_AGENT_MSG_START,
+                                saved_errno, NULL, 0);
+  uav_transport_destroy(&control_transport);
   _exit(1);
 }
 }

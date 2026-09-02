@@ -53,8 +53,8 @@ static int receive_upload(int fd, const uint8_t* expected, size_t size) {
       meta.purpose != UAV_AGENT_UPLOAD_EXECUTABLE)
     goto close_file;
 
-  if (uav_agent_proto_send_response(&transport, UAV_AGENT_MSG_UPLOAD_BEGIN,
-                                    0, NULL, 0) < 0)
+  if (uav_agent_proto_send_response(&transport, UAV_AGENT_MSG_UPLOAD_BEGIN, 0,
+                                    NULL, 0) < 0)
     goto close_file;
   if (uav_agent_proto_receive_upload(&transport, fileno(file), meta.size) < 0)
     goto close_file;
@@ -103,8 +103,7 @@ TEST(test_protocol_status_messages) {
                   strerror(errno));
   TEST_ASSERT_EQ(0, uav_agent_proto_recv(&second, &msg));
   TEST_ASSERT_EQ(0, uav_agent_proto_decode_response(
-                        &msg, UAV_AGENT_MSG_RUN, &error, &body,
-                        &body_length));
+                        &msg, UAV_AGENT_MSG_RUN, &error, &body, &body_length));
   TEST_ASSERT_EQ(EACCES, error);
   TEST_ASSERT_EQ(0, body_length);
 
@@ -134,16 +133,14 @@ TEST(test_protocol_rejects_bad_typed_payload) {
 
   msg.header.kind = UAV_PROTO_EVENT;
   msg.header.type = UAV_AGENT_MSG_PROGRAM_EXIT;
-  TEST_ASSERT_EQ(-1,
-                 uav_agent_proto_decode_program_exit(&msg, &(int){0}));
+  TEST_ASSERT_EQ(-1, uav_agent_proto_decode_program_exit(&msg, &(int){0}));
   TEST_ASSERT_EQ(EPROTO, errno);
   return 0;
 }
 
 TEST(test_protocol_run_round_trip) {
   static const char* const expected_argv[] = {"sample", "--flag", "", NULL};
-  static const char* const expected_envp[] = {"PATH=/bin", "TERM=xterm",
-                                              NULL};
+  static const char* const expected_envp[] = {"PATH=/bin", "TERM=xterm", NULL};
   struct uav_agent_exec_params params = {
       .flags = 0,
       .argc = 3,

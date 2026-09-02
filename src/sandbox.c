@@ -45,11 +45,11 @@ int uav_sandbox_create(struct uav_sandbox* s, enum uav_sandbox_backend type) {
   return ret;
 }
 
-int uav_sandbox_run_program_for(
-    const struct uav_sandbox* s, const char* program,
-    const struct uav_agent_exec_params* params, uint32_t duration_seconds) {
-  if (s == NULL || program == NULL || params == NULL ||
-      duration_seconds == 0) {
+int uav_sandbox_run_program_for(const struct uav_sandbox* s,
+                                const char* program,
+                                const struct uav_agent_exec_params* params,
+                                uint32_t duration_seconds) {
+  if (s == NULL || program == NULL || params == NULL || duration_seconds == 0) {
     errno = EINVAL;
     return -1;
   }

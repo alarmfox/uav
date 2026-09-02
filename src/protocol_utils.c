@@ -94,21 +94,20 @@ int uav_proto_recv_frame(struct uav_transport* transport, uint32_t magic,
 }
 
 int uav_proto_send_request(struct uav_transport* transport, uint32_t magic,
-                           uint16_t version, uint16_t type,
-                           const void* payload, uint32_t length) {
+                           uint16_t version, uint16_t type, const void* payload,
+                           uint32_t length) {
   return uav_proto_send_frame(transport, magic, version, UAV_PROTO_REQUEST,
                               type, payload, length);
 }
 
 int uav_proto_send_response(struct uav_transport* transport, uint32_t magic,
-                            uint16_t version, uint16_t request_type,
-                            int error, const void* body,
-                            uint32_t body_length) {
+                            uint16_t version, uint16_t request_type, int error,
+                            const void* body, uint32_t body_length) {
   uint8_t* payload;
   int ret;
 
-  if (error < 0 || body_length > UAV_PROTO_MAX_PAYLOAD -
-                                 UAV_PROTO_RESPONSE_STATUS_SIZE ||
+  if (error < 0 ||
+      body_length > UAV_PROTO_MAX_PAYLOAD - UAV_PROTO_RESPONSE_STATUS_SIZE ||
       (body == NULL && body_length > 0)) {
     errno = EINVAL;
     return -1;
@@ -131,17 +130,17 @@ int uav_proto_send_response(struct uav_transport* transport, uint32_t magic,
 }
 
 int uav_proto_send_event(struct uav_transport* transport, uint32_t magic,
-                         uint16_t version, uint16_t type,
-                         const void* payload, uint32_t length) {
-  return uav_proto_send_frame(transport, magic, version, UAV_PROTO_EVENT,
-                              type, payload, length);
+                         uint16_t version, uint16_t type, const void* payload,
+                         uint32_t length) {
+  return uav_proto_send_frame(transport, magic, version, UAV_PROTO_EVENT, type,
+                              payload, length);
 }
 
 int uav_proto_send_stream(struct uav_transport* transport, uint32_t magic,
-                          uint16_t version, uint16_t type,
-                          const void* payload, uint32_t length) {
-  return uav_proto_send_frame(transport, magic, version, UAV_PROTO_STREAM,
-                              type, payload, length);
+                          uint16_t version, uint16_t type, const void* payload,
+                          uint32_t length) {
+  return uav_proto_send_frame(transport, magic, version, UAV_PROTO_STREAM, type,
+                              payload, length);
 }
 
 int uav_proto_decode_response(const struct uav_proto_msg* msg,

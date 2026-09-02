@@ -19,7 +19,7 @@ RUN apk add --no-cache \
     libcap
 
 COPY --from=build /src/uav /sbin/uav
-COPY --from=build /src/uavd /sbin/uavd
+COPY --from=build /src/uav-daemon /sbin/uav-daemon
 COPY --from=build /src/uav-agent /sbin/uav-agent
 RUN mkdir -p /etc/init.d
 RUN <<'EOF' cat > /etc/init.d/rcS

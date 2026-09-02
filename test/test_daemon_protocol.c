@@ -58,10 +58,10 @@ TEST(test_daemon_protocol_round_trip) {
   sender_ctx.fd = fds[0];
   receiver_ctx.fd = fds[1];
 
-  TEST_ASSERT_MSG(uav_daemon_proto_send_request(
-                      &sender, UAV_DAEMON_MSG_REGISTER_AGENT, payload,
-                      sizeof(payload)) == 0,
-                  strerror(errno));
+  TEST_ASSERT_MSG(
+      uav_daemon_proto_send_request(&sender, UAV_DAEMON_MSG_REGISTER_AGENT,
+                                    payload, sizeof(payload)) == 0,
+      strerror(errno));
   TEST_ASSERT_EQ(0, uav_daemon_proto_recv(&receiver, &msg));
   TEST_ASSERT_EQ(UAV_DAEMON_PROTO_MAGIC, msg.header.magic);
   TEST_ASSERT_EQ(UAV_DAEMON_PROTO_VERSION, msg.header.version);
@@ -70,10 +70,8 @@ TEST(test_daemon_protocol_round_trip) {
   TEST_ASSERT_EQ(sizeof(payload), msg.header.length);
   TEST_ASSERT_EQ(0, memcmp(payload, msg.payload, sizeof(payload)));
 
-  TEST_ASSERT_EQ(
-      0, uav_daemon_proto_send_request(&receiver,
-                                        UAV_DAEMON_MSG_REGISTER_WORKLOAD,
-                                        NULL, 0));
+  TEST_ASSERT_EQ(0, uav_daemon_proto_send_request(
+                        &receiver, UAV_DAEMON_MSG_REGISTER_WORKLOAD, NULL, 0));
   TEST_ASSERT_EQ(0, uav_daemon_proto_recv(&sender, &msg));
   TEST_ASSERT_EQ(UAV_DAEMON_PROTO_MAGIC, msg.header.magic);
   TEST_ASSERT_EQ(UAV_DAEMON_PROTO_VERSION, msg.header.version);
@@ -107,13 +105,13 @@ TEST(test_daemon_protocol_result) {
   sender_ctx.fd = fds[0];
   receiver_ctx.fd = fds[1];
 
-  TEST_ASSERT_EQ(0, uav_daemon_proto_send_response(
-                        &sender, UAV_DAEMON_MSG_REGISTER_AGENT, EBUSY, NULL,
-                        0));
+  TEST_ASSERT_EQ(
+      0, uav_daemon_proto_send_response(&sender, UAV_DAEMON_MSG_REGISTER_AGENT,
+                                        EBUSY, NULL, 0));
   TEST_ASSERT_EQ(0, uav_daemon_proto_recv(&receiver, &msg));
-  TEST_ASSERT_EQ(0, uav_daemon_proto_decode_response(
-                        &msg, UAV_DAEMON_MSG_REGISTER_AGENT, &error, &body,
-                        &body_length));
+  TEST_ASSERT_EQ(
+      0, uav_daemon_proto_decode_response(&msg, UAV_DAEMON_MSG_REGISTER_AGENT,
+                                          &error, &body, &body_length));
   TEST_ASSERT_EQ(EBUSY, error);
   TEST_ASSERT_EQ(0, body_length);
 
@@ -121,9 +119,9 @@ TEST(test_daemon_protocol_result) {
   msg.header.type = UAV_DAEMON_MSG_REGISTER_AGENT;
   msg.header.length = 4;
   uav_proto_put_u32(msg.payload, INT_MAX + 1U);
-  TEST_ASSERT_EQ(-1, uav_daemon_proto_decode_response(
-                        &msg, UAV_DAEMON_MSG_REGISTER_AGENT, &error, &body,
-                        &body_length));
+  TEST_ASSERT_EQ(
+      -1, uav_daemon_proto_decode_response(&msg, UAV_DAEMON_MSG_REGISTER_AGENT,
+                                           &error, &body, &body_length));
   TEST_ASSERT_EQ(EPROTO, errno);
 
   close(fds[0]);
@@ -155,7 +153,6 @@ TEST(test_protocols_reject_each_other) {
   TEST_ASSERT_EQ(-1, uav_daemon_proto_recv(&second, &msg));
   TEST_ASSERT_EQ(EPROTO, errno);
 
-
   close(fds[0]);
   close(fds[1]);
   return 0;
@@ -181,11 +178,11 @@ TEST(test_protocol_frame_validation) {
   first_ctx.fd = fds[0];
   second_ctx.fd = fds[1];
 
-  TEST_ASSERT_MSG(uav_proto_send_frame(&first, UAV_DAEMON_PROTO_MAGIC,
-                                       UAV_DAEMON_PROTO_VERSION + 1,
-                                       UAV_PROTO_REQUEST,
-                                       UAV_DAEMON_MSG_REGISTER_AGENT, NULL, 0) == 0,
-                  strerror(errno));
+  TEST_ASSERT_MSG(
+      uav_proto_send_frame(&first, UAV_DAEMON_PROTO_MAGIC,
+                           UAV_DAEMON_PROTO_VERSION + 1, UAV_PROTO_REQUEST,
+                           UAV_DAEMON_MSG_REGISTER_AGENT, NULL, 0) == 0,
+      strerror(errno));
   TEST_ASSERT_EQ(-1, uav_daemon_proto_recv(&second, &msg));
   TEST_ASSERT_EQ(EPROTO, errno);
 
@@ -195,7 +192,7 @@ TEST(test_protocol_frame_validation) {
   uav_proto_put_u16(invalid_header + 8, UAV_DAEMON_MSG_REGISTER_AGENT);
   uav_proto_put_u32(invalid_header + 12, 0);
   TEST_ASSERT_EQ(0, uav_transport_write_all(&first, invalid_header,
-                                             sizeof(invalid_header)));
+                                            sizeof(invalid_header)));
   TEST_ASSERT_EQ(-1, uav_daemon_proto_recv(&second, &msg));
   TEST_ASSERT_EQ(EPROTO, errno);
 
@@ -218,10 +215,8 @@ TEST(test_protocol_reports_transport_failure) {
       .ctx = &ctx,
   };
 
-  TEST_ASSERT_EQ(
-      -1, uav_daemon_proto_send_request(&transport,
-                                         UAV_DAEMON_MSG_REGISTER_AGENT, NULL,
-                                         0));
+  TEST_ASSERT_EQ(-1, uav_daemon_proto_send_request(
+                         &transport, UAV_DAEMON_MSG_REGISTER_AGENT, NULL, 0));
   TEST_ASSERT_EQ(EIO, errno);
   return 0;
 }

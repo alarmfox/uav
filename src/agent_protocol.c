@@ -23,8 +23,8 @@ static int uav_agent_proto_expect_empty(struct uav_transport* transport,
   int error;
 
   if (uav_agent_proto_recv(transport, &msg) < 0) return -1;
-  if (uav_agent_proto_decode_response(&msg, type, &error, &body,
-                                      &body_length) < 0)
+  if (uav_agent_proto_decode_response(&msg, type, &error, &body, &body_length) <
+      0)
     return -1;
   if (error != 0) {
     errno = error;
@@ -43,8 +43,7 @@ static int uav_agent_proto_send_event_u32(struct uav_transport* transport,
   uint8_t payload[UAV_STATUS_SIZE];
 
   uav_proto_put_u32(payload, value);
-  return uav_agent_proto_send_event(transport, type, payload,
-                                    sizeof(payload));
+  return uav_agent_proto_send_event(transport, type, payload, sizeof(payload));
 }
 
 static int uav_agent_proto_decode_u32(const struct uav_proto_msg* msg,
@@ -63,12 +62,10 @@ static int uav_agent_proto_decode_u32(const struct uav_proto_msg* msg,
   return 0;
 }
 
-int uav_agent_proto_send_request(struct uav_transport* transport,
-                                 uint16_t type, const void* payload,
-                                 uint32_t length) {
+int uav_agent_proto_send_request(struct uav_transport* transport, uint16_t type,
+                                 const void* payload, uint32_t length) {
   return uav_proto_send_request(transport, UAV_AGENT_PROTO_MAGIC,
-                                UAV_AGENT_PROTO_VERSION, type, payload,
-                                length);
+                                UAV_AGENT_PROTO_VERSION, type, payload, length);
 }
 
 int uav_agent_proto_send_response(struct uav_transport* transport,
@@ -85,9 +82,8 @@ int uav_agent_proto_send_event(struct uav_transport* transport, uint16_t type,
                               UAV_AGENT_PROTO_VERSION, type, payload, length);
 }
 
-int uav_agent_proto_send_stream(struct uav_transport* transport,
-                                uint16_t type, const void* payload,
-                                uint32_t length) {
+int uav_agent_proto_send_stream(struct uav_transport* transport, uint16_t type,
+                                const void* payload, uint32_t length) {
   return uav_proto_send_stream(transport, UAV_AGENT_PROTO_MAGIC,
                                UAV_AGENT_PROTO_VERSION, type, payload, length);
 }
@@ -102,8 +98,7 @@ int uav_agent_proto_decode_response(const struct uav_proto_msg* msg,
                                     uint16_t request_type, int* error,
                                     const uint8_t** body,
                                     uint32_t* body_length) {
-  return uav_proto_decode_response(msg, request_type, error, body,
-                                   body_length);
+  return uav_proto_decode_response(msg, request_type, error, body, body_length);
 }
 
 static int uav_agent_proto_is_loader_variable(const uint8_t* value,
@@ -140,8 +135,8 @@ static int uav_agent_proto_validate_run_params(
 
   entries = params->argc + params->envc;
   for (size_t i = 0; i < entries; ++i) {
-    const char* value = i < params->argc ? params->argv[i]
-                                         : params->envp[i - params->argc];
+    const char* value =
+        i < params->argc ? params->argv[i] : params->envp[i - params->argc];
     size_t length;
 
     if (value == NULL) {
@@ -197,8 +192,8 @@ int uav_agent_proto_send_run(struct uav_transport* transport,
 
   entries = params->argc + params->envc;
   for (size_t i = 0; i < entries; ++i) {
-    const char* value = i < params->argc ? params->argv[i]
-                                         : params->envp[i - params->argc];
+    const char* value =
+        i < params->argc ? params->argv[i] : params->envp[i - params->argc];
     size_t length = strlen(value);
 
     if (payload_length > UAV_PROTO_MAX_PAYLOAD - UAV_RUN_RECORD_SIZE ||
@@ -223,8 +218,8 @@ int uav_agent_proto_send_run(struct uav_transport* transport,
 
   offset = UAV_RUN_HEADER_SIZE;
   for (size_t i = 0; i < entries; ++i) {
-    const char* value = i < params->argc ? params->argv[i]
-                                         : params->envp[i - params->argc];
+    const char* value =
+        i < params->argc ? params->argv[i] : params->envp[i - params->argc];
     size_t length = strlen(value);
 
     uav_proto_put_u32(payload + offset, (uint32_t)length);
@@ -400,8 +395,8 @@ int uav_agent_proto_upload(struct uav_transport* transport, int source_fd,
   uav_proto_put_u32(begin + 4, meta->source_mode);
   uav_proto_put_u32(begin + 8, (uint32_t)meta->purpose);
 
-  if (uav_agent_proto_send_request(transport, UAV_AGENT_MSG_UPLOAD_BEGIN,
-                                   begin, sizeof(begin)) < 0)
+  if (uav_agent_proto_send_request(transport, UAV_AGENT_MSG_UPLOAD_BEGIN, begin,
+                                   sizeof(begin)) < 0)
     return -1;
   if (uav_agent_proto_expect_empty(transport, UAV_AGENT_MSG_UPLOAD_BEGIN) < 0)
     return -1;

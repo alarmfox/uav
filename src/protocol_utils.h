@@ -61,18 +61,17 @@ int uav_proto_recv_frame(struct uav_transport* transport, uint32_t magic,
                          uint16_t version, struct uav_proto_msg* msg);
 
 int uav_proto_send_request(struct uav_transport* transport, uint32_t magic,
-                           uint16_t version, uint16_t type,
-                           const void* payload, uint32_t length);
+                           uint16_t version, uint16_t type, const void* payload,
+                           uint32_t length);
 int uav_proto_send_response(struct uav_transport* transport, uint32_t magic,
-                            uint16_t version, uint16_t request_type,
-                            int error, const void* body,
-                            uint32_t body_length);
+                            uint16_t version, uint16_t request_type, int error,
+                            const void* body, uint32_t body_length);
 int uav_proto_send_event(struct uav_transport* transport, uint32_t magic,
-                         uint16_t version, uint16_t type,
-                         const void* payload, uint32_t length);
+                         uint16_t version, uint16_t type, const void* payload,
+                         uint32_t length);
 int uav_proto_send_stream(struct uav_transport* transport, uint32_t magic,
-                          uint16_t version, uint16_t type,
-                          const void* payload, uint32_t length);
+                          uint16_t version, uint16_t type, const void* payload,
+                          uint32_t length);
 int uav_proto_decode_response(const struct uav_proto_msg* msg,
                               uint16_t expected_type, int* error,
                               const uint8_t** body, uint32_t* body_length);

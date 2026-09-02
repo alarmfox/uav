@@ -1,6 +1,5 @@
 #include "daemon_protocol.h"
 
-#include <errno.h>
 #include "protocol_utils.h"
 
 int uav_daemon_proto_send_request(struct uav_transport* transport,
@@ -29,6 +28,5 @@ int uav_daemon_proto_decode_response(const struct uav_proto_msg* msg,
                                      uint16_t request_type, int* error,
                                      const uint8_t** body,
                                      uint32_t* body_length) {
-  return uav_proto_decode_response(msg, request_type, error, body,
-                                   body_length);
+  return uav_proto_decode_response(msg, request_type, error, body, body_length);
 }

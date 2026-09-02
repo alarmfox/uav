@@ -12,8 +12,8 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-#include "daemon_protocol.h"
 #include "config.h"
+#include "daemon_protocol.h"
 #include "transport.h"
 #include "utils.h"
 
@@ -33,12 +33,10 @@ struct uavd_state {
 
 static struct uavd_state uavd = {
     .socket_fd = -1,
-    .sandbox = (struct uavd_sandbox_state) {
-      .sandbox_cgroup_fd = -1,
-      .agent_cgroup_fd = -1,
-      .workload_cgroup_fd = -1
-    }
-};
+    .sandbox = (struct uavd_sandbox_state){.sandbox_cgroup_fd = -1,
+                                           .agent_cgroup_fd = -1,
+                                           .workload_cgroup_fd = -1,
+                                           .id = 0UL}};
 
 static int g_shutdown_requested = 0;
 static void on_shutdown_requested(int signal_number) {
@@ -56,19 +54,23 @@ static int uavd_init_cgroup_hierarchy(void) {
   ret = mkdir(path, 0755);
   if (ret != 0 && errno != EEXIST) return ret;
 
-  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/uavd", UAV_UAVD_ROOT_CGROUP_NAME);
+  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/uavd",
+           UAV_UAVD_ROOT_CGROUP_NAME);
   ret = mkdir(path, 0755);
   if (ret != 0 && errno != EEXIST) return ret;
 
   strcpy(controllers, "+cpu +memory +pids");
-  /* Write to parent's subtree_control to enable controllers for children. We need to enable this
-   * for root cgroup too since it is proprietary */
+  /* Write to parent's subtree_control to enable controllers for children. We
+   * need to enable this for root cgroup too since it is proprietary */
   strcpy(path, "/sys/fs/cgroup/cgroup.subtree_control");
-  ret = uav_write_file(path, (const unsigned char*)controllers, strlen(controllers));
-  if(ret != 0 && errno != EEXIST) return ret;
+  ret = uav_write_file(path, (const unsigned char*)controllers,
+                       strlen(controllers));
+  if (ret != 0 && errno != EEXIST) return ret;
 
-  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/cgroup.subtree_control", UAV_UAVD_ROOT_CGROUP_NAME);
-  ret = uav_write_file(path, (const unsigned char*)controllers, strlen(controllers));
+  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/cgroup.subtree_control",
+           UAV_UAVD_ROOT_CGROUP_NAME);
+  ret = uav_write_file(path, (const unsigned char*)controllers,
+                       strlen(controllers));
 
   return (ret != 0 && errno != EEXIST) ? ret : 0;
 }
@@ -77,10 +79,11 @@ static int uavd_add_pid_to_cgroup(const char* cgroup, pid_t pid) {
   char path[PATH_MAX];
   char buffer[32];
 
-  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/%s/cgroup.procs", UAV_UAVD_ROOT_CGROUP_NAME, cgroup);
+  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/%s/cgroup.procs",
+           UAV_UAVD_ROOT_CGROUP_NAME, cgroup);
   snprintf(buffer, sizeof(buffer), "%d\n", pid);
 
-  return uav_write_file(path, (const unsigned char*) buffer, strlen(buffer));
+  return uav_write_file(path, (const unsigned char*)buffer, strlen(buffer));
 }
 
 static int uavd_remove_stale_socket(const char* path) {
@@ -240,15 +243,18 @@ static int handle_register_agent(pid_t pid) {
    * ----/agent
    * ----/workload
    * */
-  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/%s", UAV_UAVD_ROOT_CGROUP_NAME, cgroup);
+  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/%s",
+           UAV_UAVD_ROOT_CGROUP_NAME, cgroup);
   ret = mkdir(path, 0755);
   if (ret != 0) return ret;
 
-  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/%s/agent", UAV_UAVD_ROOT_CGROUP_NAME, cgroup);
+  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/%s/agent",
+           UAV_UAVD_ROOT_CGROUP_NAME, cgroup);
   ret = mkdir(path, 0755);
   if (ret != 0) return ret;
 
-  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/%s/workload", UAV_UAVD_ROOT_CGROUP_NAME, cgroup);
+  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/%s/workload",
+           UAV_UAVD_ROOT_CGROUP_NAME, cgroup);
   ret = mkdir(path, 0755);
   if (ret != 0) return ret;
 
@@ -257,19 +263,23 @@ static int handle_register_agent(pid_t pid) {
   return uavd_add_pid_to_cgroup(path, pid);
 }
 
-static int handle_register_workload(void) {
-
-  return 0;
-}
+static int handle_register_workload(void) { return 0; }
 
 static int handle_client(int fd) {
   int ret = -1;
   int request_error;
   int saved_errno;
-  struct uav_transport *transport = NULL;
+  int passcred_opt = 1;
+  struct uav_transport* transport = NULL;
   struct uav_proto_msg msg;
   struct ucred creds;
   socklen_t len = sizeof(creds);
+
+  ret = setsockopt(fd, SOL_SOCKET, SO_PASSCRED, &passcred_opt, sizeof(int));
+  if (ret != 0) {
+    fprintf(stderr, "[UAVD] error: failed to set SO_PASSCRED\n");
+    goto cleanup;
+  }
 
   ret = getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &creds, &len);
   if (ret != 0) {
@@ -281,11 +291,10 @@ static int handle_client(int fd) {
   if (transport == NULL) goto cleanup;
   fd = -1;
 
-  printf("[UAVD] connected pid: %d\n", creds.pid);
-  printf("[UAVD] connected uid: %d\n", creds.uid);
-  printf("[UAVD] connected gid: %d\n\n", creds.gid);
+  printf("[UAVD] connected client pid=%d uid=%d gid=%d\n", creds.pid, creds.uid,
+         creds.gid);
 
-  while(1) {
+  while (1) {
     ret = uav_daemon_proto_recv(transport, &msg);
     if (ret != 0) goto cleanup;
 

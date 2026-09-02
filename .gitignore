@@ -5,11 +5,11 @@ test/*.out
 /*
 !/.gitignore
 !/agent
+!/cli
+!/daemon
 !/scripts
 !/src
 !/test
-!/uav-cli
-!/uav-d
 !/Makefile
 !/README.md
 !/.dockerignore
