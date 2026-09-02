@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-    echo "Usage: $0 <config-header> <agent-binary>" >&2
+    printf "Usage: $0 <config-header> <agent-binary>\n" >&2
     exit 1
 }
 
@@ -17,26 +17,28 @@ agent=$2
 }
 
 [ -x "$agent" ] || {
-    echo "Agent not found or not executable: $agent" >&2
+    printf "Agent not found or not executable: $agent\n" >&2
     exit 1
 }
 
 initramfs=$(sed -n 's/^#define UAV_SANDBOX_INITRAMFS_PATH "\(.*\)"/\1/p' "$config")
 
 [ -n "$initramfs" ] || {
-    echo "UAV_SANDBOX_INITRAMFS_PATH not found in $config" >&2
+    printf "UAV_SANDBOX_INITRAMFS_PATH not found in $config\n" >&2
     exit 1
 }
 
 [ -f "$initramfs" ] || {
-    echo "Initramfs not found: $initramfs" >&2
+    printf "Initramfs not found: $initramfs\n" >&2
     exit 1
 }
 
-gzip -t "$initramfs"
-
 work=$(mktemp -d)
-output=$(mktemp)
+root="$work/root"
+input="$work/input.cpio"
+initramfs_dir=$(dirname "$initramfs")
+initramfs_name=$(basename "$initramfs")
+output=$(mktemp "$initramfs_dir/.${initramfs_name}.tmp.XXXXXX")
 
 cleanup() {
     rm -rf "$work"
@@ -45,13 +47,20 @@ cleanup() {
 
 trap cleanup EXIT
 
-gzip -dc "$initramfs" | (cd "$work" && cpio -id --quiet)
+mkdir "$root"
+gzip -dc "$initramfs" > "$input"
+(cd "$root" && cpio -id --quiet < "$input")
 
-install -Dm755 "$agent" "$work/sbin/uav-agent"
+install -Dm755 "$agent" "$root/sbin/uav-agent"
 
 (
-    cd "$work"
-    find . -print0 | cpio --null -o --quiet --format=newc --owner=0:0 | gzip -n9 > "$output"
-)
+    cd "$root"
+    find . -print0 |
+        sort -z |
+        cpio --null -o --quiet --format=newc --owner=0:0 |
+        gzip -n9
+    ) > "$output"
+
+chmod --reference="$initramfs" "$output"
 
 mv "$output" "$initramfs"
