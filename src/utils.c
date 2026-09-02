@@ -227,13 +227,12 @@ int uav_write_all(int fd, const void* buf, size_t size) {
 int uav_write_file(const char* path, const unsigned char* data, size_t len) {
   int fd = -1, ret = -1;
   int saved_errno;
-  ssize_t written;
 
-  fd = open(path, O_WRONLY, 0644);
+  fd = open(path, O_WRONLY | O_CLOEXEC);
   if (fd < 0) goto cleanup;
 
-  written = uav_write_all(fd, data, len);
-  if (written < 0 || (size_t)written != len) goto cleanup;
+  ret = uav_write_all(fd, data, len);
+  if (ret != 0) goto cleanup;
 
   ret = 0;
 

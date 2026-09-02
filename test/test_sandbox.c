@@ -1,4 +1,5 @@
 #include "sandbox.h"
+#include "agent_protocol.h"
 #include "uav_test.h"
 #include "utils.h"
 
@@ -11,6 +12,14 @@ TEST(test_run_sandbox_ns) {
   int destroy_ret;
   int run_ret;
   int ret = -1;
+  static const char* const argv[] = {"sandbox-test", NULL};
+  struct uav_agent_exec_params params = {
+      .flags = 0,
+      .argc = 1,
+      .argv = argv,
+      .envc = 0,
+      .envp = NULL,
+  };
 
   fd = mkstemp(path);
   TEST_ASSERT(fd >= 0);
@@ -22,7 +31,7 @@ TEST(test_run_sandbox_ns) {
   ret = uav_sandbox_create(&s, UAV_SANDBOX_BACKEND_CONTAINER);
   TEST_ASSERT_EQ(0, ret);
 
-  run_ret = uav_sandbox_run_program(&s, path);
+  run_ret = uav_sandbox_run_program_for(&s, path, &params, 1);
   destroy_ret = uav_sandbox_destroy(&s);
   unlink(path);
 

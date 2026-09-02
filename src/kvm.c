@@ -67,7 +67,14 @@ out:
   return ret;
 }
 
-int uav_sandbox_kvm_run(const struct uav_sandbox* s, const char* program) {
+int uav_sandbox_kvm_run(const struct uav_sandbox* s, const char* program,
+                        const struct uav_agent_exec_params* params,
+                        uint32_t duration_seconds) {
+  if (params != NULL || duration_seconds != 0) {
+    errno = ENOTSUP;
+    return -1;
+  }
+
   (void)program;
   int kvmfd = -1;
   int ret = -1;

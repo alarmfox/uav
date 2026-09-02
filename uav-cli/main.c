@@ -1,27 +1,30 @@
 #include <errno.h>
 #include <getopt.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "agent_protocol.h"
 #include "sandbox.h"
 
 /* ========================= Sandbox =========================*/
 
 static void print_sandbox_run_help(void) {
-  printf("Usage: uav sandbox run <program> \n\n");
+  printf("Usage: uav sandbox run --seconds <seconds> <program>\n\n");
   printf("Run a program in an isolated environment.\n\n");
   printf("Options:\n");
   printf(
       "  -b, --backend <backend> Isolation technology. 'container' or 'kvm' "
       "allowed\n");
+  printf("  -t, --seconds <seconds> Maximum execution time\n");
   printf("  -h, --help              Show this help message\n\n");
   printf("Arguments:\n");
   printf("  program                 Program to execute in sandbox\n");
   printf(
       "                          If omitted, drops into interactive shell\n\n");
   printf("Examples:\n");
-  printf("  uav sandbox run suspicious.sh\n");
+  printf("  uav sandbox run --seconds 30 suspicious.sh\n");
 }
 
 static int cmd_sandbox_run(int argc, const char* argv[]) {
@@ -30,13 +33,25 @@ static int cmd_sandbox_run(int argc, const char* argv[]) {
   struct uav_sandbox s;
   enum uav_sandbox_backend backend = UAV_SANDBOX_BACKEND_CONTAINER;
   const char* program = NULL;
+  uint32_t duration_seconds = 0;
+  char* end;
+  unsigned long parsed_seconds;
+  const char* exec_argv[1];
+  struct uav_agent_exec_params params = {
+      .flags = 0,
+      .argc = 1,
+      .argv = exec_argv,
+      .envc = 0,
+      .envp = NULL,
+  };
 
   static const struct option long_options[] = {
       {"backend", required_argument, NULL, 'b'},
+      {"seconds", required_argument, NULL, 't'},
       {"help", no_argument, NULL, 'h'},
       {NULL, 0, NULL, 0}};
 
-  while ((opt = getopt_long(argc, (char* const*)argv, "b:h", long_options,
+  while ((opt = getopt_long(argc, (char* const*)argv, "b:t:h", long_options,
                             NULL)) != -1) {
     switch (opt) {
       case 'b':
@@ -53,6 +68,18 @@ static int cmd_sandbox_run(int argc, const char* argv[]) {
           return EXIT_FAILURE;
         }
         break;
+      case 't':
+        errno = 0;
+        end = NULL;
+        parsed_seconds = strtoul(optarg, &end, 10);
+        if (errno != 0 || end == optarg || *end != '\0' ||
+            parsed_seconds == 0 || parsed_seconds > UINT32_MAX) {
+          fprintf(stderr, "[UAV] invalid execution duration: %s\n", optarg);
+          print_sandbox_run_help();
+          return EXIT_FAILURE;
+        }
+        duration_seconds = (uint32_t)parsed_seconds;
+        break;
       case 'h':
         print_sandbox_run_help();
         return EXIT_SUCCESS;
@@ -62,8 +89,11 @@ static int cmd_sandbox_run(int argc, const char* argv[]) {
     }
   }
 
-  if (optind >= argc) {
-    fprintf(stderr, "[UAV] missing program\n");
+  if (duration_seconds == 0 || optind >= argc) {
+    if (duration_seconds == 0)
+      fprintf(stderr, "[UAV] missing execution duration\n");
+    else
+      fprintf(stderr, "[UAV] missing program\n");
     print_sandbox_run_help();
     return EXIT_FAILURE;
   }
@@ -75,6 +105,7 @@ static int cmd_sandbox_run(int argc, const char* argv[]) {
   }
 
   program = argv[optind];
+  exec_argv[0] = program;
 
   ret = uav_sandbox_create(&s, backend);
 
@@ -84,7 +115,7 @@ static int cmd_sandbox_run(int argc, const char* argv[]) {
     goto cleanup;
   }
 
-  ret = uav_sandbox_run_program(&s, program);
+  ret = uav_sandbox_run_program_for(&s, program, &params, duration_seconds);
   if (ret != 0) {
     fprintf(stderr, "[UAV] cannot run sandbox: %s\n", strerror(errno));
     ret = EXIT_FAILURE;
@@ -108,7 +139,7 @@ static void print_sandbox_help(void) {
   printf("  run,                Run a program in a sandbox\n");
   printf("  -h, --help          Show this help message\n\n");
   printf("Examples:\n");
-  printf("  uav sandbox run suspicious.sh\n");
+  printf("  uav sandbox run --seconds 30 suspicious.sh\n");
 }
 
 static int cmd_sandbox(int argc, const char* argv[]) {

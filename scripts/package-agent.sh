@@ -28,8 +28,15 @@ initramfs=$(sed -n 's/^#define UAV_SANDBOX_INITRAMFS_PATH "\(.*\)"/\1/p' "$confi
     exit 1
 }
 
+[ -f "$initramfs" ] || {
+    echo "Initramfs not found: $initramfs" >&2
+    exit 1
+}
+
+gzip -t "$initramfs"
+
 work=$(mktemp -d)
-output=$(mktemp "${initramfs}.tmp.XXXXXX")
+output=$(mktemp)
 
 cleanup() {
     rm -rf "$work"
@@ -44,10 +51,7 @@ install -Dm755 "$agent" "$work/sbin/uav-agent"
 
 (
     cd "$work"
-    find . -print0 |
-        sort -z |
-        cpio --null -o --quiet --format=newc --owner=0:0 |
-        gzip -n > "$output"
+    find . -print0 | cpio --null -o --quiet --format=newc --owner=0:0 | gzip -9 > "$output"
 )
 
 mv "$output" "$initramfs"

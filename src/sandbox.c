@@ -8,10 +8,14 @@
 
 /* Sandbox helpers */
 int uav_sandbox_ns_create(struct uav_sandbox* s);
-int uav_sandbox_ns_run(const struct uav_sandbox* s, const char* program);
+int uav_sandbox_ns_run(const struct uav_sandbox* s, const char* program,
+                       const struct uav_agent_exec_params* params,
+                       uint32_t duration_seconds);
 int uav_sandbox_ns_destroy(struct uav_sandbox* s);
 int uav_sandbox_kvm_create(struct uav_sandbox* s);
-int uav_sandbox_kvm_run(const struct uav_sandbox* s, const char* program);
+int uav_sandbox_kvm_run(const struct uav_sandbox* s, const char* program,
+                        const struct uav_agent_exec_params* params,
+                        uint32_t duration_seconds);
 int uav_sandbox_kvm_destroy(struct uav_sandbox* s);
 
 int uav_sandbox_create(struct uav_sandbox* s, enum uav_sandbox_backend type) {
@@ -41,17 +45,20 @@ int uav_sandbox_create(struct uav_sandbox* s, enum uav_sandbox_backend type) {
   return ret;
 }
 
-int uav_sandbox_run_program(const struct uav_sandbox* s, const char* program) {
-  if (s == NULL || program == NULL) {
+int uav_sandbox_run_program_for(
+    const struct uav_sandbox* s, const char* program,
+    const struct uav_agent_exec_params* params, uint32_t duration_seconds) {
+  if (s == NULL || program == NULL || params == NULL ||
+      duration_seconds == 0) {
     errno = EINVAL;
     return -1;
   }
 
   switch (s->backend) {
     case UAV_SANDBOX_BACKEND_CONTAINER:
-      return uav_sandbox_ns_run(s, program);
+      return uav_sandbox_ns_run(s, program, params, duration_seconds);
     case UAV_SANDBOX_BACKEND_KVM:
-      return uav_sandbox_kvm_run(s, program);
+      return uav_sandbox_kvm_run(s, program, params, duration_seconds);
   }
 
   errno = EINVAL;

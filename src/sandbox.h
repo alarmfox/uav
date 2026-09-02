@@ -3,6 +3,7 @@
 
 #include <linux/limits.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <unistd.h>
 
 enum uav_sandbox_backend {
@@ -11,6 +12,7 @@ enum uav_sandbox_backend {
 };
 
 struct uav_transport;
+struct uav_agent_exec_params;
 
 struct uav_sandbox {
   /* Backend used to execute the sandbox */
@@ -47,7 +49,9 @@ struct uav_sandbox {
 };
 
 int uav_sandbox_create(struct uav_sandbox* s, enum uav_sandbox_backend type);
-int uav_sandbox_run_program(const struct uav_sandbox* s, const char* program);
+int uav_sandbox_run_program_for(
+    const struct uav_sandbox* s, const char* program,
+    const struct uav_agent_exec_params* params, uint32_t duration_seconds);
 int uav_sandbox_destroy(struct uav_sandbox* s);
 
 #endif  //! UAV_SANDBOX_H

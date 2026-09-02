@@ -1,7 +1,9 @@
 #include <errno.h>
+#include <inttypes.h>
 #include <poll.h>
 #include <signal.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,17 +12,32 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include "daemon_protocol.h"
 #include "config.h"
+#include "transport.h"
 #include "utils.h"
 
 #define UAVD_BACKLOG 1
 
+struct uavd_sandbox_state {
+  int sandbox_cgroup_fd;
+  int agent_cgroup_fd;
+  int workload_cgroup_fd;
+  uint64_t id;
+};
+
 struct uavd_state {
   int socket_fd;
+  struct uavd_sandbox_state sandbox;
 };
 
 static struct uavd_state uavd = {
     .socket_fd = -1,
+    .sandbox = (struct uavd_sandbox_state) {
+      .sandbox_cgroup_fd = -1,
+      .agent_cgroup_fd = -1,
+      .workload_cgroup_fd = -1
+    }
 };
 
 static int g_shutdown_requested = 0;
@@ -29,27 +46,42 @@ static void on_shutdown_requested(int signal_number) {
   __atomic_store_n(&g_shutdown_requested, 1, __ATOMIC_RELAXED);
 }
 
-static int uavd_init_cgroup_hierarchy(const char* cgroup) {
+static int uavd_init_cgroup_hierarchy(void) {
   char path[PATH_MAX];
   char controllers[64];
   int ret = -1;
 
-  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s", cgroup);
+  /* Create root cgroup and uavd dedicated cgroup */
+  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s", UAV_UAVD_ROOT_CGROUP_NAME);
   ret = mkdir(path, 0755);
   if (ret != 0 && errno != EEXIST) return ret;
 
-  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/uavd", cgroup);
+  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/uavd", UAV_UAVD_ROOT_CGROUP_NAME);
   ret = mkdir(path, 0755);
   if (ret != 0 && errno != EEXIST) return ret;
-
-  /* Write to parent's subtree_control to enable controllers for children */
-  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/cgroup.subtree_control", cgroup);
 
   strcpy(controllers, "+cpu +memory +pids");
-  return uav_write_file(path, (const unsigned char*)controllers, strlen(controllers));
+  /* Write to parent's subtree_control to enable controllers for children. We need to enable this
+   * for root cgroup too since it is proprietary */
+  strcpy(path, "/sys/fs/cgroup/cgroup.subtree_control");
+  ret = uav_write_file(path, (const unsigned char*)controllers, strlen(controllers));
+  if(ret != 0 && errno != EEXIST) return ret;
+
+  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/cgroup.subtree_control", UAV_UAVD_ROOT_CGROUP_NAME);
+  ret = uav_write_file(path, (const unsigned char*)controllers, strlen(controllers));
+
+  return (ret != 0 && errno != EEXIST) ? ret : 0;
 }
 
-static int uavd_add_pid_to_cgroup(const char *cgroup,)
+static int uavd_add_pid_to_cgroup(const char* cgroup, pid_t pid) {
+  char path[PATH_MAX];
+  char buffer[32];
+
+  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/%s/cgroup.procs", UAV_UAVD_ROOT_CGROUP_NAME, cgroup);
+  snprintf(buffer, sizeof(buffer), "%d\n", pid);
+
+  return uav_write_file(path, (const unsigned char*) buffer, strlen(buffer));
+}
 
 static int uavd_remove_stale_socket(const char* path) {
   struct stat st;
@@ -167,35 +199,139 @@ cleanup:
   return ret;
 }
 
-static int uavd_setup(void) {
+static int uavd_init(void) {
   int ret;
 
-  ret = uavd_setup_socket();
+  ret = uavd_init_cgroup_hierarchy();
   if (ret != 0) return ret;
 
-  ret = uavd_init_cgroup_hierarchy("uav");
+  /* Move ourselves to uav/uavd cgroup */
+  ret = uavd_add_pid_to_cgroup("uavd", getpid());
+  if (ret != 0) return ret;
+
+  ret = uavd_setup_socket();
   if (ret != 0) return ret;
 
   return 0;
 }
 
-static void handle_client(int fd) {
+static int handle_register_agent(pid_t pid) {
+  int ret = -1;
+  char path[PATH_MAX];
+  char cgroup[64];
+  uint64_t id;
 
-  int ret;
+  if (uavd.sandbox.id == UINT64_MAX) {
+    errno = EOVERFLOW;
+    return -1;
+  }
+  id = ++uavd.sandbox.id;
+  if (snprintf(cgroup, sizeof(cgroup), "sandbox-%" PRIu64, id) >=
+      (int)sizeof(cgroup)) {
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+
+  /* Create root sandbox cgroup. The cgroup will have this structure
+   *
+   * /uav
+   * --/uavd
+   * --/sandbox-<id>
+   * ----/agent
+   * ----/workload
+   * */
+  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/%s", UAV_UAVD_ROOT_CGROUP_NAME, cgroup);
+  ret = mkdir(path, 0755);
+  if (ret != 0) return ret;
+
+  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/%s/agent", UAV_UAVD_ROOT_CGROUP_NAME, cgroup);
+  ret = mkdir(path, 0755);
+  if (ret != 0) return ret;
+
+  snprintf(path, sizeof(path), "/sys/fs/cgroup/%s/%s/workload", UAV_UAVD_ROOT_CGROUP_NAME, cgroup);
+  ret = mkdir(path, 0755);
+  if (ret != 0) return ret;
+
+  snprintf(path, sizeof(path), "%s/agent", cgroup);
+
+  return uavd_add_pid_to_cgroup(path, pid);
+}
+
+static int handle_register_workload(void) {
+
+  return 0;
+}
+
+static int handle_client(int fd) {
+  int ret = -1;
+  int request_error;
+  int saved_errno;
+  struct uav_transport *transport = NULL;
+  struct uav_proto_msg msg;
   struct ucred creds;
   socklen_t len = sizeof(creds);
 
   ret = getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &creds, &len);
   if (ret != 0) {
     fprintf(stderr, "[UAVD] error: failed to get credentials\n");
-    return;
+    goto cleanup;
   }
 
-  printf("[UAVD] connected process id: %d\n", creds.pid);
-  printf("[UAVD] connected user id   : %d\n", creds.uid);
-  printf("[UAVD] connected group id  : %d\n", creds.gid);
-  printf("\n");
+  transport = uav_fd_transport_create(fd);
+  if (transport == NULL) goto cleanup;
+  fd = -1;
 
+  printf("[UAVD] connected pid: %d\n", creds.pid);
+  printf("[UAVD] connected uid: %d\n", creds.uid);
+  printf("[UAVD] connected gid: %d\n\n", creds.gid);
+
+  while(1) {
+    ret = uav_daemon_proto_recv(transport, &msg);
+    if (ret != 0) goto cleanup;
+
+    request_error = 0;
+    if (msg.header.kind != UAV_PROTO_REQUEST) {
+      request_error = EPROTO;
+    } else {
+      switch (msg.header.type) {
+        case UAV_DAEMON_MSG_REGISTER_AGENT:
+          if (msg.header.length != 0)
+            request_error = EPROTO;
+          else if (handle_register_agent(creds.pid) < 0)
+            request_error = errno;
+          break;
+        case UAV_DAEMON_MSG_REGISTER_WORKLOAD:
+          if (msg.header.length != 0)
+            request_error = EPROTO;
+          else if (handle_register_workload() < 0)
+            request_error = errno;
+          break;
+        default:
+          request_error = EPROTO;
+          break;
+      }
+    }
+
+    if (uav_daemon_proto_send_response(transport, msg.header.type,
+                                       request_error, NULL, 0) < 0)
+      goto cleanup;
+
+    /* A protocol or operation failure leaves daemon state non-retryable. */
+    if (request_error != 0) {
+      errno = request_error;
+      ret = -1;
+      goto cleanup;
+    }
+  }
+  ret = 0;
+
+cleanup:
+  saved_errno = errno;
+  if (transport != NULL) uav_transport_destroy(&transport);
+  if (fd >= 0) close(fd);
+  errno = saved_errno;
+
+  return ret;
 }
 
 static int uavd_loop(void) {
@@ -211,8 +347,6 @@ static int uavd_loop(void) {
       if (client_fd < 0) continue;
 
       handle_client(client_fd);
-
-      close(client_fd);
     }
   }
   return 0;
@@ -224,7 +358,7 @@ int main(void) {
   signal(SIGINT, &on_shutdown_requested);
   signal(SIGTERM, &on_shutdown_requested);
 
-  ret = uavd_setup();
+  ret = uavd_init();
   if (ret != 0) {
     fprintf(stderr, "[UAVD] cannot init: %s\n", strerror(errno));
     goto cleanup;
