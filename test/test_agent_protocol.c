@@ -39,8 +39,7 @@ static int receive_upload(int fd, const uint8_t* expected, size_t size) {
   while (offset < size) {
     if (uav_agent_proto_receive_request(fd, &msg) < 0) return 1;
     if (msg.type != UAV_AGENT_MSG_UPLOAD_CHUNK || msg.length == 0 ||
-        msg.length > UAV_AGENT_PROTO_MAX_CHUNK ||
-        msg.length > size - offset ||
+        msg.length > UAV_AGENT_PROTO_MAX_CHUNK || msg.length > size - offset ||
         memcmp(msg.payload, expected + offset, msg.length) != 0)
       return 1;
     offset += msg.length;
@@ -64,19 +63,19 @@ TEST(test_protocol_request_response) {
 
   TEST_ASSERT_EQ(0, socketpair(AF_UNIX, SOCK_STREAM, 0, fds));
 
-  TEST_ASSERT_EQ(0, uav_agent_proto_send_request(
-                        fds[0], UAV_AGENT_MSG_START, payload, sizeof(payload)));
+  TEST_ASSERT_EQ(0, uav_agent_proto_send_request(fds[0], UAV_AGENT_MSG_START,
+                                                 payload, sizeof(payload)));
   TEST_ASSERT_EQ(0, uav_agent_proto_receive_request(fds[1], &msg));
   TEST_ASSERT_EQ(UAV_AGENT_MSG_START, msg.type);
   TEST_ASSERT_EQ(0, msg.error);
   TEST_ASSERT_EQ(sizeof(payload), msg.length);
   TEST_ASSERT_EQ(0, memcmp(payload, msg.payload, sizeof(payload)));
 
-  TEST_ASSERT_EQ(0, uav_agent_proto_send_response(
-                        fds[1], UAV_AGENT_MSG_START, EACCES, payload,
-                        sizeof(payload)));
-  TEST_ASSERT_EQ(0, uav_agent_proto_receive_response(
-                        fds[0], UAV_AGENT_MSG_START, &msg));
+  TEST_ASSERT_EQ(
+      0, uav_agent_proto_send_response(fds[1], UAV_AGENT_MSG_START, EACCES,
+                                       payload, sizeof(payload)));
+  TEST_ASSERT_EQ(
+      0, uav_agent_proto_receive_response(fds[0], UAV_AGENT_MSG_START, &msg));
   TEST_ASSERT_EQ(EACCES, msg.error);
   TEST_ASSERT_EQ(sizeof(payload), msg.length);
   TEST_ASSERT_EQ(0, memcmp(payload, msg.payload, sizeof(payload)));
@@ -91,10 +90,10 @@ TEST(test_protocol_rejects_wrong_response_type) {
   int fds[2];
 
   TEST_ASSERT_EQ(0, socketpair(AF_UNIX, SOCK_STREAM, 0, fds));
-  TEST_ASSERT_EQ(0, uav_agent_proto_send_response(
-                        fds[0], UAV_AGENT_MSG_START, 0, NULL, 0));
-  TEST_ASSERT_EQ(-1, uav_agent_proto_receive_response(
-                         fds[1], UAV_AGENT_MSG_RUN, &msg));
+  TEST_ASSERT_EQ(0, uav_agent_proto_send_response(fds[0], UAV_AGENT_MSG_START,
+                                                  0, NULL, 0));
+  TEST_ASSERT_EQ(
+      -1, uav_agent_proto_receive_response(fds[1], UAV_AGENT_MSG_RUN, &msg));
   TEST_ASSERT_EQ(EPROTO, errno);
 
   close(fds[0]);

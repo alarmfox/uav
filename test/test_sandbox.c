@@ -56,8 +56,8 @@ TEST(test_run_sandbox_rejects_zero_deadline) {
       .backend = UAV_SANDBOX_BACKEND_CONTAINER,
   };
 
-  TEST_ASSERT_EQ(-1, uav_sandbox_run_program_with_deadline(
-                         &sandbox, "sample", &params, 0));
+  TEST_ASSERT_EQ(-1, uav_sandbox_run_program_with_deadline(&sandbox, "sample",
+                                                           &params, 0));
   TEST_ASSERT_EQ(EINVAL, errno);
   return 0;
 }

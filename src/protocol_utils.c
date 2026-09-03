@@ -46,10 +46,10 @@ static void uav_proto_encode_header(uint8_t header[UAV_PROTO_HEADER_SIZE],
   uav_proto_put_u32(header + 12, length);
 }
 
-static int uav_proto_decode_header(
-    const uint8_t header[UAV_PROTO_HEADER_SIZE], uint32_t magic,
-    uint16_t version, uint16_t expected_kind, uint16_t* type,
-    uint32_t* length) {
+static int uav_proto_decode_header(const uint8_t header[UAV_PROTO_HEADER_SIZE],
+                                   uint32_t magic, uint16_t version,
+                                   uint16_t expected_kind, uint16_t* type,
+                                   uint32_t* length) {
   uint16_t kind;
 
   if (type == NULL || length == NULL ||
@@ -129,8 +129,7 @@ static int uav_write_full(int fd, const void* buffer, size_t size) {
   while (size > 0) {
     ssize_t written = send(fd, position, size, MSG_NOSIGNAL);
 
-    if (written < 0 && errno == ENOTSOCK)
-      written = write(fd, position, size);
+    if (written < 0 && errno == ENOTSOCK) written = write(fd, position, size);
     if (written < 0) {
       if (errno == EINTR) continue;
       return -1;
@@ -153,8 +152,8 @@ int uav_proto_stream_send(int fd, uint32_t magic, uint16_t version,
   uint8_t status[UAV_PROTO_RESPONSE_STATUS_SIZE];
   uint32_t wire_length;
 
-  if (uav_proto_validate_send(fd, kind, error, payload, length,
-                              &wire_length) < 0)
+  if (uav_proto_validate_send(fd, kind, error, payload, length, &wire_length) <
+      0)
     return -1;
 
   uav_proto_encode_header(header, magic, version, kind, type, wire_length);
@@ -200,8 +199,8 @@ int uav_proto_seqpacket_send(int fd, uint32_t magic, uint16_t version,
   size_t iov_count = 1;
   ssize_t sent;
 
-  if (uav_proto_validate_send(fd, kind, error, payload, length,
-                              &wire_length) < 0)
+  if (uav_proto_validate_send(fd, kind, error, payload, length, &wire_length) <
+      0)
     return -1;
 
   uav_proto_encode_header(header, magic, version, kind, type, wire_length);
@@ -256,8 +255,8 @@ int uav_proto_seqpacket_receive(int fd, uint32_t magic, uint16_t version,
     memset(&message, 0, sizeof(message));
     memset(&control, 0, sizeof(control));
     iov[0] = (struct iovec){.iov_base = header, .iov_len = sizeof(header)};
-    iov[1] =
-        (struct iovec){.iov_base = msg->payload, .iov_len = sizeof(msg->payload)};
+    iov[1] = (struct iovec){.iov_base = msg->payload,
+                            .iov_len = sizeof(msg->payload)};
     message.msg_iov = iov;
     message.msg_iovlen = 2;
     if (credentials != NULL) {

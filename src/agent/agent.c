@@ -189,8 +189,7 @@ static void uav_agent_discard_pending_upload(void) {
   if (agent.pending_upload_fd >= 0) close(agent.pending_upload_fd);
   agent.pending_upload_fd = -1;
 
-  if (agent.pending_upload_path[0] != '\0')
-    unlink(agent.pending_upload_path);
+  if (agent.pending_upload_path[0] != '\0') unlink(agent.pending_upload_path);
   agent.pending_upload_path[0] = '\0';
   agent.pending_upload_remaining = 0;
   agent.pending_upload_mode = 0;
@@ -296,9 +295,8 @@ static int uav_agent_upload_end(const struct uav_proto_msg* msg) {
 static int uav_agent_register_workload(void) {
   struct uav_proto_msg response;
 
-  if (uav_daemon_proto_send_request(agent.daemon_fd,
-                                    UAV_DAEMON_MSG_REGISTER_WORKLOAD, NULL,
-                                    0) < 0)
+  if (uav_daemon_proto_send_request(
+          agent.daemon_fd, UAV_DAEMON_MSG_REGISTER_WORKLOAD, NULL, 0) < 0)
     return -1;
   if (uav_daemon_proto_receive_response(
           agent.daemon_fd, UAV_DAEMON_MSG_REGISTER_WORKLOAD, &response) < 0)
@@ -369,7 +367,8 @@ static int uav_agent_run(const struct uav_proto_msg* msg) {
      */
     if (uav_agent_drop_capabilities() != 0) _exit(126);
 
-    /* The daemon receives this SEQPACKET request and its credentials together. */
+    /* The daemon receives this SEQPACKET request and its credentials together.
+     */
     if (uav_agent_register_workload() < 0) _exit(125);
 
     /*
@@ -500,10 +499,9 @@ static int uav_agent_timeout_program(void) {
 }
 
 static int uav_agent_dispatch(const struct uav_proto_msg* msg) {
-  if (agent.program_pid > 0 ||
-      (agent.pending_upload_fd >= 0 &&
-       msg->type != UAV_AGENT_MSG_UPLOAD_CHUNK &&
-       msg->type != UAV_AGENT_MSG_UPLOAD_END)) {
+  if (agent.program_pid > 0 || (agent.pending_upload_fd >= 0 &&
+                                msg->type != UAV_AGENT_MSG_UPLOAD_CHUNK &&
+                                msg->type != UAV_AGENT_MSG_UPLOAD_END)) {
     errno = EBUSY;
     return -1;
   }

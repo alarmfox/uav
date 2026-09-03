@@ -79,6 +79,6 @@ run-qemu: package
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 format:
-	clang-format -style google -i src/**/*.c src/*.h  test/*.c test/*.h
+	clang-format -style google -i src/*.c src/**/*.c src/*.h  test/*.c test/*.h
 clean:
 	$(RM) $(UAV_TARGET) $(AGENT_TARGET) $(TEST_TARGETS) $(UAVD_TARGET) src/**/*.o src/*.o test/*.o

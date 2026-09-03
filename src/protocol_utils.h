@@ -50,8 +50,7 @@ int uav_proto_stream_send(int fd, uint32_t magic, uint16_t version,
                           uint16_t kind, uint16_t type, int error,
                           const void* payload, uint32_t length);
 int uav_proto_stream_receive(int fd, uint32_t magic, uint16_t version,
-                             uint16_t expected_kind,
-                             struct uav_proto_msg* msg);
+                             uint16_t expected_kind, struct uav_proto_msg* msg);
 
 int uav_proto_seqpacket_send(int fd, uint32_t magic, uint16_t version,
                              uint16_t kind, uint16_t type, int error,

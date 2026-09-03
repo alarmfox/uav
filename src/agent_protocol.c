@@ -12,8 +12,7 @@
 #define UAV_RUN_HEADER_SIZE 16
 #define UAV_RUN_RECORD_SIZE 4
 
-static int uav_agent_proto_expect_empty(int fd,
-                                        uint16_t type) {
+static int uav_agent_proto_expect_empty(int fd, uint16_t type) {
   struct uav_proto_msg msg;
 
   if (uav_agent_proto_receive_response(fd, type, &msg) < 0) return -1;
@@ -29,11 +28,11 @@ static int uav_agent_proto_expect_empty(int fd,
   return 0;
 }
 
-int uav_agent_proto_send_request(int fd, uint16_t type,
-                                 const void* payload, uint32_t length) {
+int uav_agent_proto_send_request(int fd, uint16_t type, const void* payload,
+                                 uint32_t length) {
   return uav_proto_stream_send(fd, UAV_AGENT_PROTO_MAGIC,
-                               UAV_AGENT_PROTO_VERSION, UAV_PROTO_REQUEST,
-                               type, 0, payload, length);
+                               UAV_AGENT_PROTO_VERSION, UAV_PROTO_REQUEST, type,
+                               0, payload, length);
 }
 
 int uav_agent_proto_receive_request(int fd, struct uav_proto_msg* msg) {
@@ -42,8 +41,7 @@ int uav_agent_proto_receive_request(int fd, struct uav_proto_msg* msg) {
                                   msg);
 }
 
-int uav_agent_proto_send_response(int fd,
-                                  uint16_t request_type, int error,
+int uav_agent_proto_send_response(int fd, uint16_t request_type, int error,
                                   const void* body, uint32_t body_length) {
   return uav_proto_stream_send(fd, UAV_AGENT_PROTO_MAGIC,
                                UAV_AGENT_PROTO_VERSION, UAV_PROTO_RESPONSE,
@@ -373,8 +371,7 @@ int uav_agent_proto_upload(int fd, int source_fd,
     remaining -= (uint32_t)count;
   }
 
-  if (uav_agent_proto_send_request(fd, UAV_AGENT_MSG_UPLOAD_END, NULL,
-                                   0) < 0)
+  if (uav_agent_proto_send_request(fd, UAV_AGENT_MSG_UPLOAD_END, NULL, 0) < 0)
     return -1;
   return uav_agent_proto_expect_empty(fd, UAV_AGENT_MSG_UPLOAD_END);
 }

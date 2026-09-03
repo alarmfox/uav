@@ -42,11 +42,11 @@ TEST(test_daemon_protocol_request_response) {
 
   TEST_ASSERT_EQ(0, socketpair(AF_UNIX, SOCK_SEQPACKET, 0, fds));
   TEST_ASSERT_EQ(0, enable_passcred(fds[1]));
-  TEST_ASSERT_EQ(0, uav_daemon_proto_send_request(
-                        fds[0], UAV_DAEMON_MSG_REGISTER_AGENT, payload,
-                        sizeof(payload)));
   TEST_ASSERT_EQ(
-      0, uav_daemon_proto_receive_request(fds[1], &msg, &credentials));
+      0, uav_daemon_proto_send_request(fds[0], UAV_DAEMON_MSG_REGISTER_AGENT,
+                                       payload, sizeof(payload)));
+  TEST_ASSERT_EQ(0,
+                 uav_daemon_proto_receive_request(fds[1], &msg, &credentials));
   TEST_ASSERT_EQ(UAV_DAEMON_MSG_REGISTER_AGENT, msg.type);
   TEST_ASSERT_EQ(0, msg.error);
   TEST_ASSERT_EQ(sizeof(payload), msg.length);
@@ -55,9 +55,9 @@ TEST(test_daemon_protocol_request_response) {
   TEST_ASSERT_EQ(getuid(), credentials.uid);
   TEST_ASSERT_EQ(getgid(), credentials.gid);
 
-  TEST_ASSERT_EQ(0, uav_daemon_proto_send_response(
-                        fds[1], UAV_DAEMON_MSG_REGISTER_AGENT, EBUSY, payload,
-                        sizeof(payload)));
+  TEST_ASSERT_EQ(
+      0, uav_daemon_proto_send_response(fds[1], UAV_DAEMON_MSG_REGISTER_AGENT,
+                                        EBUSY, payload, sizeof(payload)));
   TEST_ASSERT_EQ(0, uav_daemon_proto_receive_response(
                         fds[0], UAV_DAEMON_MSG_REGISTER_AGENT, &msg));
   TEST_ASSERT_EQ(EBUSY, msg.error);
@@ -136,8 +136,8 @@ TEST(test_daemon_protocol_credentials_follow_sender) {
   }
 
   close(fds[1]);
-  TEST_ASSERT_EQ(
-      0, uav_daemon_proto_receive_request(fds[0], &msg, &credentials));
+  TEST_ASSERT_EQ(0,
+                 uav_daemon_proto_receive_request(fds[0], &msg, &credentials));
   TEST_ASSERT_EQ(UAV_DAEMON_MSG_REGISTER_WORKLOAD, msg.type);
   TEST_ASSERT_EQ(child, credentials.pid);
   TEST_ASSERT_EQ(child, waitpid(child, &status, 0));
@@ -173,20 +173,20 @@ TEST(test_daemon_protocol_rejects_invalid_frames) {
   TEST_ASSERT_EQ(0, socketpair(AF_UNIX, SOCK_SEQPACKET, 0, fds));
   TEST_ASSERT_EQ(0, enable_passcred(fds[1]));
 
-  TEST_ASSERT_EQ(0, uav_proto_seqpacket_send(
-                        fds[0], UAV_DAEMON_PROTO_MAGIC,
-                        UAV_DAEMON_PROTO_VERSION + 1, UAV_PROTO_REQUEST,
-                        UAV_DAEMON_MSG_REGISTER_AGENT, 0, NULL, 0));
   TEST_ASSERT_EQ(
-      -1, uav_daemon_proto_receive_request(fds[1], &msg, &credentials));
+      0, uav_proto_seqpacket_send(
+             fds[0], UAV_DAEMON_PROTO_MAGIC, UAV_DAEMON_PROTO_VERSION + 1,
+             UAV_PROTO_REQUEST, UAV_DAEMON_MSG_REGISTER_AGENT, 0, NULL, 0));
+  TEST_ASSERT_EQ(-1,
+                 uav_daemon_proto_receive_request(fds[1], &msg, &credentials));
   TEST_ASSERT_EQ(EPROTO, errno);
 
   make_header(header, UAV_DAEMON_PROTO_MAGIC, UAV_DAEMON_PROTO_VERSION,
               UAV_PROTO_REQUEST, UAV_DAEMON_MSG_REGISTER_AGENT, 1, 0);
   TEST_ASSERT_EQ(TEST_HEADER_SIZE,
                  send(fds[0], header, sizeof(header), MSG_NOSIGNAL));
-  TEST_ASSERT_EQ(
-      -1, uav_daemon_proto_receive_request(fds[1], &msg, &credentials));
+  TEST_ASSERT_EQ(-1,
+                 uav_daemon_proto_receive_request(fds[1], &msg, &credentials));
   TEST_ASSERT_EQ(EPROTO, errno);
 
   make_header(header, UAV_DAEMON_PROTO_MAGIC, UAV_DAEMON_PROTO_VERSION,
@@ -194,8 +194,8 @@ TEST(test_daemon_protocol_rejects_invalid_frames) {
   TEST_ASSERT_EQ(TEST_HEADER_SIZE,
                  send(fds[0], header, sizeof(header), MSG_NOSIGNAL));
   TEST_ASSERT_EQ(1, send(fds[0], "x", 1, MSG_NOSIGNAL));
-  TEST_ASSERT_EQ(
-      -1, uav_daemon_proto_receive_request(fds[1], &msg, &credentials));
+  TEST_ASSERT_EQ(-1,
+                 uav_daemon_proto_receive_request(fds[1], &msg, &credentials));
   TEST_ASSERT_EQ(EPROTO, errno);
 
   close(fds[0]);
@@ -219,8 +219,8 @@ TEST(test_daemon_protocol_rejects_oversized_record) {
   TEST_ASSERT_EQ(0, socketpair(AF_UNIX, SOCK_SEQPACKET, 0, fds));
   TEST_ASSERT_EQ(0, enable_passcred(fds[1]));
   TEST_ASSERT_EQ(size, send(fds[0], frame, size, MSG_NOSIGNAL));
-  TEST_ASSERT_EQ(
-      -1, uav_daemon_proto_receive_request(fds[1], &msg, &credentials));
+  TEST_ASSERT_EQ(-1,
+                 uav_daemon_proto_receive_request(fds[1], &msg, &credentials));
   TEST_ASSERT_EQ(EMSGSIZE, errno);
 
   close(fds[0]);
@@ -239,8 +239,8 @@ TEST(test_protocols_reject_each_other) {
   TEST_ASSERT_EQ(0, uav_proto_seqpacket_send(
                         fds[0], UAV_AGENT_PROTO_MAGIC, UAV_AGENT_PROTO_VERSION,
                         UAV_PROTO_REQUEST, UAV_AGENT_MSG_START, 0, NULL, 0));
-  TEST_ASSERT_EQ(
-      -1, uav_daemon_proto_receive_request(fds[1], &msg, &credentials));
+  TEST_ASSERT_EQ(-1,
+                 uav_daemon_proto_receive_request(fds[1], &msg, &credentials));
   TEST_ASSERT_EQ(EPROTO, errno);
 
   close(fds[0]);

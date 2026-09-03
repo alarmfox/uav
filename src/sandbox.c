@@ -4,7 +4,6 @@
 #include <string.h>
 #include <unistd.h>
 
-
 /* Sandbox helpers */
 int uav_sandbox_ns_create(struct uav_sandbox* s);
 int uav_sandbox_ns_run(const struct uav_sandbox* s, const char* program,
@@ -77,8 +76,7 @@ int uav_sandbox_run_program_with_deadline(
     return -1;
   }
 
-  return uav_sandbox_run_program_internal(s, program, params,
-                                          duration_seconds);
+  return uav_sandbox_run_program_internal(s, program, params, duration_seconds);
 }
 
 int uav_sandbox_destroy(struct uav_sandbox* s) {
@@ -103,7 +101,7 @@ int uav_sandbox_destroy(struct uav_sandbox* s) {
   }
 
   saved_errno = errno;
-  if(s->control_fd >= 0) close(s->control_fd);
+  if (s->control_fd >= 0) close(s->control_fd);
   s->control_fd = -1;
   if (ret < 0) errno = saved_errno;
 

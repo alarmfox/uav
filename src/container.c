@@ -134,7 +134,8 @@ int uav_sandbox_ns_create(struct uav_sandbox* s) {
   ret = uav_setup_userns_mappings(child, uid, gid);
   if (ret != 0) goto cleanup;
 
-  ret = uav_agent_proto_send_request(s->control_fd, UAV_AGENT_MSG_START, NULL, 0);
+  ret =
+      uav_agent_proto_send_request(s->control_fd, UAV_AGENT_MSG_START, NULL, 0);
   if (ret < 0) goto cleanup;
 
   ret = uav_agent_proto_receive_response(s->control_fd, UAV_AGENT_MSG_START,
@@ -232,8 +233,8 @@ int uav_sandbox_ns_run(const struct uav_sandbox* s, const char* program,
 
   if (uav_agent_proto_encode_run(&request, params, duration_seconds) < 0)
     goto cleanup;
-  if (uav_agent_proto_send_request(s->control_fd, request.type,
-                                   request.payload, request.length) < 0)
+  if (uav_agent_proto_send_request(s->control_fd, request.type, request.payload,
+                                   request.length) < 0)
     goto cleanup;
   if (uav_agent_proto_receive_response(s->control_fd, UAV_AGENT_MSG_RUN,
                                        &response) < 0)
@@ -287,8 +288,9 @@ int uav_sandbox_ns_destroy(struct uav_sandbox* s) {
   }
 
   if (s->data.container.child > 0) {
-    if (s->control_fd >=0 && uav_agent_proto_send_request(
-                        s->control_fd, UAV_AGENT_MSG_SHUTDOWN, NULL, 0) == 0) {
+    if (s->control_fd >= 0 &&
+        uav_agent_proto_send_request(s->control_fd, UAV_AGENT_MSG_SHUTDOWN,
+                                     NULL, 0) == 0) {
       struct uav_proto_msg msg;
 
       if (uav_agent_proto_receive_response(s->control_fd,
@@ -717,8 +719,8 @@ static int uav_sandbox_connect_and_register_to_daemon(void) {
 
   if (uav_daemon_proto_send_request(fd, UAV_DAEMON_MSG_REGISTER_AGENT, NULL,
                                     0) < 0 ||
-      uav_daemon_proto_receive_response(
-          fd, UAV_DAEMON_MSG_REGISTER_AGENT, &response) < 0)
+      uav_daemon_proto_receive_response(fd, UAV_DAEMON_MSG_REGISTER_AGENT,
+                                        &response) < 0)
     goto cleanup;
   if (response.length != 0) {
     errno = EPROTO;
@@ -789,8 +791,8 @@ static int uav_sandbox_exec_entrypoint(int control_fd, int daemon_fd) {
   char* const envp[] = {"PATH=/bin:/sbin:/usr/bin:/usr/sbin", "TERM=xterm",
                         "HOME=/root", "PS1=(@\\h):\\w>", NULL};
 
-  char* const argv[] = {"/sbin/uav-agent", "--control-fd", control_fd_string,
-                        "--daemon-fd",       daemon_fd_string, NULL};
+  char* const argv[] = {"/sbin/uav-agent", "--control-fd",   control_fd_string,
+                        "--daemon-fd",     daemon_fd_string, NULL};
 
   execve("/sbin/uav-agent", argv, envp);
 
