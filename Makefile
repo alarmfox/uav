@@ -81,5 +81,4 @@ run-qemu: package
 format:
 	clang-format -style google -i src/**/*.c src/*.h  test/*.c test/*.h
 clean:
-	$(RM) $(UAV_TARGET) $(AGENT_TARGET) $(TEST_TARGETS) $(UAVD_TARGET) \
-		daemon/*.o agent/*.o src/*.o test/*.o cli/*.o
+	$(RM) $(UAV_TARGET) $(AGENT_TARGET) $(TEST_TARGETS) $(UAVD_TARGET) src/**/*.o src/*.o test/*.o
