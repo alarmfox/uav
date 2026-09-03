@@ -20,7 +20,7 @@
 
 #include "agent_protocol.h"
 #include "daemon_protocol.h"
-#include "transport.h"
+#include "utils.h"
 
 #define UAV_AGENT_DIR "/run/uav"
 #define UAV_AGENT_PROGRAM_TEMPLATE UAV_AGENT_DIR "/uav_program_XXXXXX"
@@ -28,11 +28,14 @@
 struct uav_agent_state {
   int control_fd;
   int daemon_fd;
-  struct uav_transport* control_transport;
-  struct uav_transport* daemon_transport;
   pid_t program_pid;
   uint64_t program_deadline_ms;
   int program_timed_out;
+  int pending_upload_fd;
+  uint32_t pending_upload_remaining;
+  mode_t pending_upload_mode;
+  enum uav_agent_upload_purpose pending_upload_purpose;
+  char pending_upload_path[PATH_MAX];
   enum uav_agent_upload_purpose upload_purpose;
   char upload_path[PATH_MAX];
 };
@@ -40,10 +43,14 @@ struct uav_agent_state {
 static struct uav_agent_state agent = {
     .control_fd = -1,
     .daemon_fd = -1,
-    .control_transport = NULL,
     .program_pid = -1,
     .program_deadline_ms = 0,
     .program_timed_out = 0,
+    .pending_upload_fd = -1,
+    .pending_upload_remaining = 0,
+    .pending_upload_mode = 0,
+    .pending_upload_purpose = 0,
+    .pending_upload_path = {0},
     .upload_purpose = 0,
     .upload_path = {0},
 };
@@ -54,9 +61,12 @@ static int uav_agent_setup(void);
 static void uav_agent_cleanup(void);
 static int uav_agent_loop(void);
 static int uav_agent_dispatch(const struct uav_proto_msg* msg);
-static int uav_agent_upload(const struct uav_proto_msg* begin);
+static int uav_agent_upload_begin(const struct uav_proto_msg* msg);
+static int uav_agent_upload_chunk(const struct uav_proto_msg* msg);
+static int uav_agent_upload_end(const struct uav_proto_msg* msg);
+static void uav_agent_discard_pending_upload(void);
 static int uav_agent_run(const struct uav_proto_msg* msg);
-static int uav_agent_kill(void);
+static int uav_agent_register_workload(void);
 static int uav_agent_check_program(void);
 static int uav_agent_get_monotonic_ms(uint64_t* milliseconds);
 static int uav_agent_get_poll_timeout(int* timeout);
@@ -137,21 +147,15 @@ static int uav_configure_fd(int fd) {
 static int uav_agent_setup(void) {
   if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) return -1;
 
-  if(uav_configure_fd(agent.control_fd) < 0) return -1;
-  if(uav_configure_fd(agent.daemon_fd) < 0) return -1;
+  if (uav_configure_fd(agent.control_fd) < 0) return -1;
+  if (uav_configure_fd(agent.daemon_fd) < 0) return -1;
 
   if (mkdir(UAV_AGENT_DIR, 0711) < 0 && errno != EEXIST) return -1;
 
   if (prctl(PR_SET_DUMPABLE, 0) < 0) return -1;
 
-  agent.control_transport = uav_fd_transport_create(agent.control_fd);
-  if (agent.control_transport == NULL) return -1;
-
-  agent.daemon_transport = uav_fd_transport_create(agent.daemon_fd);
-  if (agent.daemon_transport == NULL) return -1;
-
   /* Complete the START request issued by the sandbox entrypoint. */
-  return uav_agent_proto_send_response(agent.control_transport, UAV_AGENT_MSG_START, 0,
+  return uav_agent_proto_send_response(agent.control_fd, UAV_AGENT_MSG_START, 0,
                                        NULL, 0);
 }
 
@@ -167,10 +171,12 @@ static void uav_agent_cleanup(void) {
     agent.program_timed_out = 0;
   }
 
-  uav_transport_destroy(&agent.control_transport);
+  uav_agent_discard_pending_upload();
+
+  if (agent.control_fd >= 0) close(agent.control_fd);
   agent.control_fd = -1;
 
-  uav_transport_destroy(&agent.daemon_transport);
+  if (agent.daemon_fd >= 0) close(agent.daemon_fd);
   agent.daemon_fd = -1;
 
   if (agent.upload_path[0] != '\0') {
@@ -179,21 +185,30 @@ static void uav_agent_cleanup(void) {
   }
 }
 
-static int uav_agent_upload(const struct uav_proto_msg* begin) {
+static void uav_agent_discard_pending_upload(void) {
+  if (agent.pending_upload_fd >= 0) close(agent.pending_upload_fd);
+  agent.pending_upload_fd = -1;
+
+  if (agent.pending_upload_path[0] != '\0')
+    unlink(agent.pending_upload_path);
+  agent.pending_upload_path[0] = '\0';
+  agent.pending_upload_remaining = 0;
+  agent.pending_upload_mode = 0;
+  agent.pending_upload_purpose = 0;
+}
+
+static int uav_agent_upload_begin(const struct uav_proto_msg* msg) {
   char path[] = UAV_AGENT_PROGRAM_TEMPLATE;
-  int fd = -1;
   int flags;
-  int saved_errno;
-  int ret = -1;
   mode_t effective_mode;
   struct uav_agent_upload_meta meta;
 
-  if (agent.program_pid > 0) {
+  if (agent.program_pid > 0 || agent.pending_upload_fd >= 0) {
     errno = EBUSY;
     return -1;
   }
 
-  if (uav_agent_proto_decode_upload_begin(begin, &meta) < 0) return -1;
+  if (uav_agent_proto_decode_upload_begin(msg, &meta) < 0) return -1;
 
   switch (meta.purpose) {
     case UAV_AGENT_UPLOAD_EXECUTABLE:
@@ -208,41 +223,95 @@ static int uav_agent_upload(const struct uav_proto_msg* begin) {
   }
 
   /* mkstemp gives every uploaded file a private, unpredictable pathname. */
-  fd = mkstemp(path);
-  if (fd < 0) goto out;
+  agent.pending_upload_fd = mkstemp(path);
+  if (agent.pending_upload_fd < 0) return -1;
+  strcpy(agent.pending_upload_path, path);
 
-  flags = fcntl(fd, F_GETFD);
-  if (flags < 0 || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0) goto out;
+  flags = fcntl(agent.pending_upload_fd, F_GETFD);
+  if (flags < 0 ||
+      fcntl(agent.pending_upload_fd, F_SETFD, flags | FD_CLOEXEC) < 0) {
+    int saved_errno = errno;
 
-  if (uav_agent_proto_send_response(agent.control_transport, UAV_AGENT_MSG_UPLOAD_BEGIN,
-                                    0, NULL, 0) < 0)
-    goto out;
-  if (uav_agent_proto_receive_upload(agent.control_transport, fd, meta.size) < 0)
-    goto out;
-
-  if (fchmod(fd, effective_mode) < 0) goto out;
-
-  if (close(fd) < 0) {
-    fd = -1;
-    goto out;
+    uav_agent_discard_pending_upload();
+    errno = saved_errno;
+    return -1;
   }
-  fd = -1;
 
-  ret = uav_agent_proto_send_response(agent.control_transport, UAV_AGENT_MSG_UPLOAD_END,
-                                      0, NULL, 0);
-  if (ret < 0) goto out;
+  agent.pending_upload_remaining = meta.size;
+  agent.pending_upload_mode = effective_mode;
+  agent.pending_upload_purpose = meta.purpose;
+  return uav_agent_proto_send_response(agent.control_fd,
+                                       UAV_AGENT_MSG_UPLOAD_BEGIN, 0, NULL, 0);
+}
+
+static int uav_agent_upload_chunk(const struct uav_proto_msg* msg) {
+  if (agent.pending_upload_fd < 0 || msg->length == 0 ||
+      msg->length > UAV_AGENT_PROTO_MAX_CHUNK ||
+      msg->length > agent.pending_upload_remaining) {
+    errno = EPROTO;
+    return -1;
+  }
+
+  if (uav_write_all(agent.pending_upload_fd, msg->payload, msg->length) < 0)
+    return -1;
+
+  agent.pending_upload_remaining -= msg->length;
+  return uav_agent_proto_send_response(agent.control_fd,
+                                       UAV_AGENT_MSG_UPLOAD_CHUNK, 0, NULL, 0);
+}
+
+static int uav_agent_upload_end(const struct uav_proto_msg* msg) {
+  int fd;
+
+  if (agent.pending_upload_fd < 0 || msg->length != 0 ||
+      agent.pending_upload_remaining != 0) {
+    errno = EPROTO;
+    return -1;
+  }
+
+  if (fchmod(agent.pending_upload_fd, agent.pending_upload_mode) < 0) return -1;
+
+  fd = agent.pending_upload_fd;
+  agent.pending_upload_fd = -1;
+  if (close(fd) < 0) {
+    int saved_errno = errno;
+
+    uav_agent_discard_pending_upload();
+    errno = saved_errno;
+    return -1;
+  }
 
   if (agent.upload_path[0] != '\0') unlink(agent.upload_path);
+  strcpy(agent.upload_path, agent.pending_upload_path);
+  agent.upload_purpose = agent.pending_upload_purpose;
+  agent.pending_upload_path[0] = '\0';
+  agent.pending_upload_remaining = 0;
+  agent.pending_upload_mode = 0;
+  agent.pending_upload_purpose = 0;
 
-  strcpy(agent.upload_path, path);
-  agent.upload_purpose = meta.purpose;
+  return uav_agent_proto_send_response(agent.control_fd,
+                                       UAV_AGENT_MSG_UPLOAD_END, 0, NULL, 0);
+}
 
-out:
-  saved_errno = errno;
-  if (fd >= 0) close(fd);
-  if (ret < 0) unlink(path);
-  errno = saved_errno;
-  return ret;
+static int uav_agent_register_workload(void) {
+  struct uav_proto_msg response;
+
+  if (uav_daemon_proto_send_request(agent.daemon_fd,
+                                    UAV_DAEMON_MSG_REGISTER_WORKLOAD, NULL,
+                                    0) < 0)
+    return -1;
+  if (uav_daemon_proto_receive_response(
+          agent.daemon_fd, UAV_DAEMON_MSG_REGISTER_WORKLOAD, &response) < 0)
+    return -1;
+  if (response.length != 0) {
+    errno = EPROTO;
+    return -1;
+  }
+  if (response.error != 0) {
+    errno = response.error;
+    return -1;
+  }
+  return 0;
 }
 
 static int uav_agent_run(const struct uav_proto_msg* msg) {
@@ -262,7 +331,7 @@ static int uav_agent_run(const struct uav_proto_msg* msg) {
     return -1;
   }
 
-  if (msg->header.length == 0) {
+  if (msg->length == 0) {
     errno = EPROTO;
     return -1;
   }
@@ -298,26 +367,20 @@ static int uav_agent_run(const struct uav_proto_msg* msg) {
      * Do setup while still in the agent cgroup, so these operations are not
      * attributed to the untrusted workload.
      */
-    if (uav_agent_drop_capabilities() != 0)
-      _exit(126);
+    if (uav_agent_drop_capabilities() != 0) _exit(126);
 
-    /*
-     * send() is sufficient. SO_PASSCRED causes the kernel to attach this
-     * process's SCM_CREDENTIALS.
-     */
-    if (uav_daemon_proto_register_workload(agent.daemon_transport) < 0)
-      _exit(125);
+    /* The daemon receives this SEQPACKET request and its credentials together. */
+    if (uav_agent_register_workload() < 0) _exit(125);
 
     /*
      * Closes only the child's descriptor. The agent's descriptor remains
      * open because fork() created a separate descriptor table.
      */
-    uav_transport_destroy(&agent.daemon_transport);
-    agent.daemon_fd = -1;
-
-    uav_transport_destroy(&agent.control_transport);
+    if (agent.control_fd >= 0) close(agent.control_fd);
     agent.control_fd = -1;
 
+    if (agent.daemon_fd >= 0) close(agent.daemon_fd);
+    agent.daemon_fd = -1;
 
     execve(agent.upload_path, request.argv, request.envp);
     _exit(127);
@@ -327,23 +390,12 @@ static int uav_agent_run(const struct uav_proto_msg* msg) {
   agent.program_pid = pid;
   agent.program_deadline_ms = duration_ms == 0 ? 0 : now_ms + duration_ms;
   agent.program_timed_out = 0;
-  return uav_agent_proto_send_response(agent.control_transport, UAV_AGENT_MSG_RUN, 0,
-                                       NULL, 0);
-}
-
-static int uav_agent_kill(void) {
-  if (agent.program_pid <= 0) {
-    errno = ESRCH;
-    return -1;
-  }
-
-  if (kill(agent.program_pid, SIGKILL) < 0 && errno != ESRCH) return -1;
-
-  return uav_agent_proto_send_response(agent.control_transport, UAV_AGENT_MSG_KILL, 0,
-                                       NULL, 0);
+  return 0;
 }
 
 static int uav_agent_check_program(void) {
+  uint8_t payload[sizeof(uint32_t)];
+  int response_error;
   pid_t pid;
   int status;
 
@@ -354,22 +406,23 @@ static int uav_agent_check_program(void) {
   } while (pid < 0 && errno == EINTR);
 
   if (pid == 0) return 0;
-  if (pid < 0) return -1;
+  if (pid < 0) {
+    int saved_errno = errno;
+
+    uav_agent_proto_send_response(agent.control_fd, UAV_AGENT_MSG_RUN,
+                                  saved_errno, NULL, 0);
+    errno = saved_errno;
+    return -1;
+  }
 
   agent.program_pid = -1;
   agent.program_deadline_ms = 0;
-
-  if (agent.program_timed_out) {
-    uint8_t payload[sizeof(uint32_t)];
-
-    agent.program_timed_out = 0;
-    uav_proto_put_u32(payload, ETIMEDOUT);
-    if (uav_agent_proto_send_event(agent.control_transport, UAV_AGENT_MSG_EVENT,
-                                   payload, sizeof(payload)) < 0)
-      return -1;
-  }
-
-  return uav_agent_proto_send_program_exit(agent.control_transport, status);
+  response_error = agent.program_timed_out ? ETIMEDOUT : 0;
+  agent.program_timed_out = 0;
+  uav_proto_put_u32(payload, (uint32_t)status);
+  return uav_agent_proto_send_response(agent.control_fd, UAV_AGENT_MSG_RUN,
+                                       response_error, payload,
+                                       sizeof(payload));
 }
 
 static int uav_agent_get_monotonic_ms(uint64_t* milliseconds) {
@@ -447,32 +500,34 @@ static int uav_agent_timeout_program(void) {
 }
 
 static int uav_agent_dispatch(const struct uav_proto_msg* msg) {
-  if (msg->header.kind != UAV_PROTO_REQUEST) {
-    errno = EPROTO;
+  if (agent.program_pid > 0 ||
+      (agent.pending_upload_fd >= 0 &&
+       msg->type != UAV_AGENT_MSG_UPLOAD_CHUNK &&
+       msg->type != UAV_AGENT_MSG_UPLOAD_END)) {
+    errno = EBUSY;
     return -1;
   }
 
-  switch (msg->header.type) {
+  switch (msg->type) {
     case UAV_AGENT_MSG_UPLOAD_BEGIN:
-      return uav_agent_upload(msg);
+      return uav_agent_upload_begin(msg);
+
+    case UAV_AGENT_MSG_UPLOAD_CHUNK:
+      return uav_agent_upload_chunk(msg);
+
+    case UAV_AGENT_MSG_UPLOAD_END:
+      return uav_agent_upload_end(msg);
 
     case UAV_AGENT_MSG_RUN:
       return uav_agent_run(msg);
 
-    case UAV_AGENT_MSG_KILL:
-      if (msg->header.length != 0) {
-        errno = EPROTO;
-        return -1;
-      }
-      return uav_agent_kill();
-
     case UAV_AGENT_MSG_SHUTDOWN:
-      if (msg->header.length != 0) {
+      if (msg->length != 0) {
         errno = EPROTO;
         return -1;
       }
-      if (uav_agent_proto_send_response(agent.control_transport, UAV_AGENT_MSG_SHUTDOWN,
-                                        0, NULL, 0) < 0)
+      if (uav_agent_proto_send_response(agent.control_fd,
+                                        UAV_AGENT_MSG_SHUTDOWN, 0, NULL, 0) < 0)
         return -1;
       return 1;
 
@@ -505,15 +560,15 @@ static int uav_agent_loop(void) {
     if (ret == 0) continue;
 
     if (fd.revents & POLLIN) {
-      if (uav_agent_proto_recv(agent.control_transport, &msg) < 0) return -1;
+      if (uav_agent_proto_receive_request(agent.control_fd, &msg) < 0)
+        return -1;
 
       ret = uav_agent_dispatch(&msg);
       if (ret < 0) {
         int saved_errno = errno;
 
-        if (msg.header.kind == UAV_PROTO_REQUEST)
-          uav_agent_proto_send_response(agent.control_transport, msg.header.type,
-                                        saved_errno, NULL, 0);
+        uav_agent_proto_send_response(agent.control_fd, msg.type, saved_errno,
+                                      NULL, 0);
         errno = saved_errno;
         return -1;
       }

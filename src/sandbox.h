@@ -11,15 +11,14 @@ enum uav_sandbox_backend {
   UAV_SANDBOX_BACKEND_KVM,
 };
 
-struct uav_transport;
 struct uav_agent_exec_params;
 
 struct uav_sandbox {
   /* Backend used to execute the sandbox */
   enum uav_sandbox_backend backend;
 
-  /* Transport interface */
-  struct uav_transport* trans;
+  /* Control file descriptor */
+  int control_fd;
 
   /* Sandbox data */
   union {
@@ -49,11 +48,11 @@ struct uav_sandbox {
 };
 
 int uav_sandbox_create(struct uav_sandbox* s, enum uav_sandbox_backend type);
-/* A duration of zero disables the execution timeout. */
-int uav_sandbox_run_program_for(const struct uav_sandbox* s,
-                                const char* program,
-                                const struct uav_agent_exec_params* params,
-                                uint32_t duration_seconds);
+int uav_sandbox_run_program(const struct uav_sandbox* s, const char* program,
+                            const struct uav_agent_exec_params* params);
+int uav_sandbox_run_program_with_deadline(
+    const struct uav_sandbox* s, const char* program,
+    const struct uav_agent_exec_params* params, uint32_t duration_seconds);
 int uav_sandbox_destroy(struct uav_sandbox* s);
 
 #endif  //! UAV_SANDBOX_H

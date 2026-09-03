@@ -20,24 +20,24 @@ endif
 UAV_TARGET     = uav
 UAVD_TARGET    = uav-daemon
 AGENT_TARGET   = uav-agent
-TEST_TARGETS   = test/test_sandbox.out test/test_transport.out \
-                 test/test_agent_protocol.out test/test_daemon_protocol.out
+TEST_TARGETS   = test/test_sandbox.out test/test_agent_protocol.out test/test_daemon_protocol.out
 
 UAV_OBJS       = src/cli/main.o src/sandbox.o src/container.o src/kvm.o \
-                 src/agent_protocol.o src/protocol_utils.o src/transport.o \
+                 src/agent_protocol.o src/protocol_utils.o \
                  src/utils.o src/daemon_protocol.o
 UAVD_OBJS      = src/daemon/daemon.o src/daemon_protocol.o src/protocol_utils.o \
-                 src/transport.o src/utils.o
-AGENT_OBJS     = src/agent/agent.o src/agent_protocol.o src/transport.o \
+                 src/utils.o
+AGENT_OBJS     = src/agent/agent.o src/agent_protocol.o \
                  src/protocol_utils.o src/utils.o src/daemon_protocol.o
 TEST_OBJS      = src/sandbox.o src/container.o src/kvm.o \
                  src/agent_protocol.o src/daemon_protocol.o \
-                 src/protocol_utils.o src/transport.o src/utils.o
+                 src/protocol_utils.o src/utils.o
 
 .PHONY: all test valgrind package run-qemu clean
 
 all: $(UAV_TARGET) $(UAVD_TARGET) $(AGENT_TARGET) $(TEST_TARGETS)
 
+# Binaries
 $(UAV_TARGET): $(UAV_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDFLAGS) $(UAV_LDLIBS)
 
@@ -50,6 +50,7 @@ $(AGENT_TARGET): $(AGENT_OBJS)
 $(TEST_TARGETS): %.out: %.o $(TEST_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) $(UAV_LDLIBS)
 
+# Test
 test: $(TEST_TARGETS)
 	@for t in $(TEST_TARGETS); do \
 		echo "Running $$t..."; \
@@ -78,7 +79,7 @@ run-qemu: package
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 format:
-	clang-format -style google -i src/*.c cli/*.c agent/*.c test/*.c src/*.h  test/*.h daemon/*.c
+	clang-format -style google -i src/**/*.c src/*.h  test/*.c test/*.h
 clean:
 	$(RM) $(UAV_TARGET) $(AGENT_TARGET) $(TEST_TARGETS) $(UAVD_TARGET) \
 		daemon/*.o agent/*.o src/*.o test/*.o cli/*.o

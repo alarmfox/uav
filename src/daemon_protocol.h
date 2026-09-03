@@ -6,29 +6,20 @@
 #include "protocol_utils.h"
 
 #define UAV_DAEMON_PROTO_MAGIC 0x55415644u /* "UAVD" */
-#define UAV_DAEMON_PROTO_VERSION 3
+#define UAV_DAEMON_PROTO_VERSION 4
 
 enum uav_daemon_proto_msg_type {
   UAV_DAEMON_MSG_REGISTER_AGENT = 1,
   UAV_DAEMON_MSG_REGISTER_WORKLOAD,
 };
 
-struct uav_transport;
-
-int uav_daemon_proto_send_request(struct uav_transport* transport,
-                                  uint16_t type, const void* payload,
+int uav_daemon_proto_send_request(int fd, uint16_t type, const void* payload,
                                   uint32_t length);
-int uav_daemon_proto_send_response(struct uav_transport* transport,
-                                   uint16_t request_type, int error,
+int uav_daemon_proto_receive_request(int fd, struct uav_proto_msg* msg,
+                                     struct ucred* credentials);
+int uav_daemon_proto_send_response(int fd, uint16_t request_type, int error,
                                    const void* body, uint32_t body_length);
-int uav_daemon_proto_recv(struct uav_transport* transport,
-                          struct uav_proto_msg* msg);
-int uav_daemon_proto_decode_response(const struct uav_proto_msg* msg,
-                                     uint16_t request_type, int* error,
-                                     const uint8_t** body,
-                                     uint32_t* body_length);
-
-int uav_daemon_proto_register_agent(struct uav_transport* transport);
-int uav_daemon_proto_register_workload(struct uav_transport* transport);
+int uav_daemon_proto_receive_response(int fd, uint16_t request_type,
+                                      struct uav_proto_msg* msg);
 
 #endif  // !UAV_DAEMON_PROTOCOL_H

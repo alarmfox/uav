@@ -115,7 +115,11 @@ static int cmd_sandbox_run(int argc, const char* argv[]) {
     goto cleanup;
   }
 
-  ret = uav_sandbox_run_program_for(&s, program, &params, duration_seconds);
+  if (duration_seconds == 0)
+    ret = uav_sandbox_run_program(&s, program, &params);
+  else
+    ret = uav_sandbox_run_program_with_deadline(&s, program, &params,
+                                                duration_seconds);
   if (ret != 0) {
     fprintf(stderr, "[UAV] cannot run sandbox: %s\n", strerror(errno));
     ret = EXIT_FAILURE;

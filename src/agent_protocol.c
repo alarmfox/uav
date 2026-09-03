@@ -7,30 +7,21 @@
 #include <unistd.h>
 
 #include "protocol_utils.h"
-#include "transport.h"
-#include "utils.h"
 
 #define UAV_UPLOAD_META_SIZE 12
-#define UAV_STATUS_SIZE 4
 #define UAV_RUN_HEADER_SIZE 16
 #define UAV_RUN_RECORD_SIZE 4
 
-static int uav_agent_proto_expect_empty(struct uav_transport* transport,
+static int uav_agent_proto_expect_empty(int fd,
                                         uint16_t type) {
   struct uav_proto_msg msg;
-  const uint8_t* body;
-  uint32_t body_length;
-  int error;
 
-  if (uav_agent_proto_recv(transport, &msg) < 0) return -1;
-  if (uav_agent_proto_decode_response(&msg, type, &error, &body, &body_length) <
-      0)
-    return -1;
-  if (error != 0) {
-    errno = error;
+  if (uav_agent_proto_receive_response(fd, type, &msg) < 0) return -1;
+  if (msg.error != 0) {
+    errno = msg.error;
     return -1;
   }
-  if (body_length != 0) {
+  if (msg.length != 0) {
     errno = EPROTO;
     return -1;
   }
@@ -38,67 +29,38 @@ static int uav_agent_proto_expect_empty(struct uav_transport* transport,
   return 0;
 }
 
-static int uav_agent_proto_send_event_u32(struct uav_transport* transport,
-                                          uint16_t type, uint32_t value) {
-  uint8_t payload[UAV_STATUS_SIZE];
-
-  uav_proto_put_u32(payload, value);
-  return uav_agent_proto_send_event(transport, type, payload, sizeof(payload));
-}
-
-static int uav_agent_proto_decode_u32(const struct uav_proto_msg* msg,
-                                      uint16_t type, uint32_t* value) {
-  if (msg == NULL || value == NULL) {
-    errno = EINVAL;
-    return -1;
-  }
-
-  if (msg->header.type != type || msg->header.length != UAV_STATUS_SIZE) {
-    errno = EPROTO;
-    return -1;
-  }
-
-  *value = uav_proto_get_u32(msg->payload);
-  return 0;
-}
-
-int uav_agent_proto_send_request(struct uav_transport* transport, uint16_t type,
+int uav_agent_proto_send_request(int fd, uint16_t type,
                                  const void* payload, uint32_t length) {
-  return uav_proto_send_request(transport, UAV_AGENT_PROTO_MAGIC,
-                                UAV_AGENT_PROTO_VERSION, type, payload, length);
+  return uav_proto_stream_send(fd, UAV_AGENT_PROTO_MAGIC,
+                               UAV_AGENT_PROTO_VERSION, UAV_PROTO_REQUEST,
+                               type, 0, payload, length);
 }
 
-int uav_agent_proto_send_response(struct uav_transport* transport,
+int uav_agent_proto_receive_request(int fd, struct uav_proto_msg* msg) {
+  return uav_proto_stream_receive(fd, UAV_AGENT_PROTO_MAGIC,
+                                  UAV_AGENT_PROTO_VERSION, UAV_PROTO_REQUEST,
+                                  msg);
+}
+
+int uav_agent_proto_send_response(int fd,
                                   uint16_t request_type, int error,
                                   const void* body, uint32_t body_length) {
-  return uav_proto_send_response(transport, UAV_AGENT_PROTO_MAGIC,
-                                 UAV_AGENT_PROTO_VERSION, request_type, error,
-                                 body, body_length);
+  return uav_proto_stream_send(fd, UAV_AGENT_PROTO_MAGIC,
+                               UAV_AGENT_PROTO_VERSION, UAV_PROTO_RESPONSE,
+                               request_type, error, body, body_length);
 }
 
-int uav_agent_proto_send_event(struct uav_transport* transport, uint16_t type,
-                               const void* payload, uint32_t length) {
-  return uav_proto_send_event(transport, UAV_AGENT_PROTO_MAGIC,
-                              UAV_AGENT_PROTO_VERSION, type, payload, length);
-}
-
-int uav_agent_proto_send_stream(struct uav_transport* transport, uint16_t type,
-                                const void* payload, uint32_t length) {
-  return uav_proto_send_stream(transport, UAV_AGENT_PROTO_MAGIC,
-                               UAV_AGENT_PROTO_VERSION, type, payload, length);
-}
-
-int uav_agent_proto_recv(struct uav_transport* transport,
-                         struct uav_proto_msg* msg) {
-  return uav_proto_recv_frame(transport, UAV_AGENT_PROTO_MAGIC,
-                              UAV_AGENT_PROTO_VERSION, msg);
-}
-
-int uav_agent_proto_decode_response(const struct uav_proto_msg* msg,
-                                    uint16_t request_type, int* error,
-                                    const uint8_t** body,
-                                    uint32_t* body_length) {
-  return uav_proto_decode_response(msg, request_type, error, body, body_length);
+int uav_agent_proto_receive_response(int fd, uint16_t request_type,
+                                     struct uav_proto_msg* msg) {
+  if (uav_proto_stream_receive(fd, UAV_AGENT_PROTO_MAGIC,
+                               UAV_AGENT_PROTO_VERSION, UAV_PROTO_RESPONSE,
+                               msg) < 0)
+    return -1;
+  if (msg->type != request_type) {
+    errno = EPROTO;
+    return -1;
+  }
+  return 0;
 }
 
 static int uav_agent_proto_is_loader_variable(const uint8_t* value,
@@ -169,16 +131,14 @@ static int uav_agent_proto_validate_run_params(
   return 0;
 }
 
-int uav_agent_proto_send_run(struct uav_transport* transport,
-                             const struct uav_agent_exec_params* params,
-                             uint32_t duration_seconds) {
+int uav_agent_proto_encode_run(struct uav_proto_msg* msg,
+                               const struct uav_agent_exec_params* params,
+                               uint32_t duration_seconds) {
   size_t entries;
   size_t payload_length = UAV_RUN_HEADER_SIZE;
-  uint8_t* payload;
   size_t offset;
-  int ret;
 
-  if (transport == NULL) {
+  if (msg == NULL) {
     errno = EINVAL;
     return -1;
   }
@@ -200,16 +160,13 @@ int uav_agent_proto_send_run(struct uav_transport* transport,
     payload_length += UAV_RUN_RECORD_SIZE + length;
   }
 
-  payload = malloc(payload_length);
-  if (payload == NULL) {
-    errno = ENOMEM;
-    return -1;
-  }
-
-  uav_proto_put_u32(payload, params->flags);
-  uav_proto_put_u32(payload + 4, duration_seconds);
-  uav_proto_put_u32(payload + 8, (uint32_t)params->argc);
-  uav_proto_put_u32(payload + 12, (uint32_t)params->envc);
+  msg->type = UAV_AGENT_MSG_RUN;
+  msg->error = 0;
+  msg->length = (uint32_t)payload_length;
+  uav_proto_put_u32(msg->payload, params->flags);
+  uav_proto_put_u32(msg->payload + 4, duration_seconds);
+  uav_proto_put_u32(msg->payload + 8, (uint32_t)params->argc);
+  uav_proto_put_u32(msg->payload + 12, (uint32_t)params->envc);
 
   offset = UAV_RUN_HEADER_SIZE;
   for (size_t i = 0; i < entries; ++i) {
@@ -217,16 +174,13 @@ int uav_agent_proto_send_run(struct uav_transport* transport,
         i < params->argc ? params->argv[i] : params->envp[i - params->argc];
     size_t length = strlen(value);
 
-    uav_proto_put_u32(payload + offset, (uint32_t)length);
+    uav_proto_put_u32(msg->payload + offset, (uint32_t)length);
     offset += UAV_RUN_RECORD_SIZE;
-    memcpy(payload + offset, value, length);
+    memcpy(msg->payload + offset, value, length);
     offset += length;
   }
 
-  ret = uav_agent_proto_send_request(transport, UAV_AGENT_MSG_RUN, payload,
-                                     (uint32_t)payload_length);
-  free(payload);
-  return ret;
+  return 0;
 }
 
 int uav_agent_proto_decode_run(const struct uav_proto_msg* msg,
@@ -249,10 +203,8 @@ int uav_agent_proto_decode_run(const struct uav_proto_msg* msg,
 
   memset(request, 0, sizeof(*request));
 
-  if (msg->header.kind != UAV_PROTO_REQUEST ||
-      msg->header.type != UAV_AGENT_MSG_RUN ||
-      msg->header.length < UAV_RUN_HEADER_SIZE ||
-      msg->header.length > sizeof(msg->payload)) {
+  if (msg->type != UAV_AGENT_MSG_RUN || msg->length < UAV_RUN_HEADER_SIZE ||
+      msg->length > sizeof(msg->payload)) {
     errno = EPROTO;
     return -1;
   }
@@ -276,14 +228,14 @@ int uav_agent_proto_decode_run(const struct uav_proto_msg* msg,
     uint32_t length;
     const uint8_t* value;
 
-    if (msg->header.length - offset < UAV_RUN_RECORD_SIZE) {
+    if (msg->length - offset < UAV_RUN_RECORD_SIZE) {
       errno = EPROTO;
       return -1;
     }
 
     length = uav_proto_get_u32(msg->payload + offset);
     offset += UAV_RUN_RECORD_SIZE;
-    if ((size_t)length > msg->header.length - offset ||
+    if ((size_t)length > msg->length - offset ||
         memchr(msg->payload + offset, '\0', length) != NULL) {
       errno = EPROTO;
       return -1;
@@ -313,7 +265,7 @@ int uav_agent_proto_decode_run(const struct uav_proto_msg* msg,
     offset += length;
   }
 
-  if (offset != msg->header.length) {
+  if (offset != msg->length) {
     errno = EPROTO;
     return -1;
   }
@@ -371,13 +323,13 @@ void uav_agent_proto_free_run(struct uav_agent_exec_request* request) {
   memset(request, 0, sizeof(*request));
 }
 
-int uav_agent_proto_upload(struct uav_transport* transport, int source_fd,
+int uav_agent_proto_upload(int fd, int source_fd,
                            const struct uav_agent_upload_meta* meta) {
   uint8_t begin[UAV_UPLOAD_META_SIZE];
   uint8_t chunk[UAV_AGENT_PROTO_MAX_CHUNK];
   uint32_t remaining;
 
-  if (transport == NULL || source_fd < 0 || meta == NULL || meta->size == 0 ||
+  if (fd < 0 || source_fd < 0 || meta == NULL || meta->size == 0 ||
       (meta->source_mode & ~0777U) != 0 ||
       (meta->purpose != UAV_AGENT_UPLOAD_DATA &&
        meta->purpose != UAV_AGENT_UPLOAD_EXECUTABLE)) {
@@ -389,10 +341,10 @@ int uav_agent_proto_upload(struct uav_transport* transport, int source_fd,
   uav_proto_put_u32(begin + 4, meta->source_mode);
   uav_proto_put_u32(begin + 8, (uint32_t)meta->purpose);
 
-  if (uav_agent_proto_send_request(transport, UAV_AGENT_MSG_UPLOAD_BEGIN, begin,
+  if (uav_agent_proto_send_request(fd, UAV_AGENT_MSG_UPLOAD_BEGIN, begin,
                                    sizeof(begin)) < 0)
     return -1;
-  if (uav_agent_proto_expect_empty(transport, UAV_AGENT_MSG_UPLOAD_BEGIN) < 0)
+  if (uav_agent_proto_expect_empty(fd, UAV_AGENT_MSG_UPLOAD_BEGIN) < 0)
     return -1;
 
   remaining = meta->size;
@@ -412,17 +364,19 @@ int uav_agent_proto_upload(struct uav_transport* transport, int source_fd,
       return -1;
     }
 
-    if (uav_agent_proto_send_stream(transport, UAV_AGENT_MSG_UPLOAD_CHUNK,
-                                    chunk, (uint32_t)count) < 0)
+    if (uav_agent_proto_send_request(fd, UAV_AGENT_MSG_UPLOAD_CHUNK, chunk,
+                                     (uint32_t)count) < 0)
+      return -1;
+    if (uav_agent_proto_expect_empty(fd, UAV_AGENT_MSG_UPLOAD_CHUNK) < 0)
       return -1;
 
     remaining -= (uint32_t)count;
   }
 
-  if (uav_agent_proto_send_request(transport, UAV_AGENT_MSG_UPLOAD_END, NULL,
+  if (uav_agent_proto_send_request(fd, UAV_AGENT_MSG_UPLOAD_END, NULL,
                                    0) < 0)
     return -1;
-  return uav_agent_proto_expect_empty(transport, UAV_AGENT_MSG_UPLOAD_END);
+  return uav_agent_proto_expect_empty(fd, UAV_AGENT_MSG_UPLOAD_END);
 }
 
 int uav_agent_proto_decode_upload_begin(const struct uav_proto_msg* msg,
@@ -434,9 +388,8 @@ int uav_agent_proto_decode_upload_begin(const struct uav_proto_msg* msg,
     return -1;
   }
 
-  if (msg->header.kind != UAV_PROTO_REQUEST ||
-      msg->header.type != UAV_AGENT_MSG_UPLOAD_BEGIN ||
-      msg->header.length != UAV_UPLOAD_META_SIZE) {
+  if (msg->type != UAV_AGENT_MSG_UPLOAD_BEGIN ||
+      msg->length != UAV_UPLOAD_META_SIZE) {
     errno = EPROTO;
     return -1;
   }
@@ -453,75 +406,5 @@ int uav_agent_proto_decode_upload_begin(const struct uav_proto_msg* msg,
   }
 
   meta->purpose = (enum uav_agent_upload_purpose)purpose;
-  return 0;
-}
-
-int uav_agent_proto_receive_upload(struct uav_transport* transport,
-                                   int destination_fd, uint32_t size) {
-  struct uav_proto_msg msg;
-  uint32_t remaining;
-
-  if (transport == NULL || destination_fd < 0 || size == 0) {
-    errno = EINVAL;
-    return -1;
-  }
-
-  remaining = size;
-  while (remaining > 0) {
-    if (uav_agent_proto_recv(transport, &msg) < 0) return -1;
-
-    if (msg.header.kind != UAV_PROTO_STREAM ||
-        msg.header.type != UAV_AGENT_MSG_UPLOAD_CHUNK ||
-        msg.header.length == 0 ||
-        msg.header.length > UAV_AGENT_PROTO_MAX_CHUNK ||
-        msg.header.length > remaining) {
-      errno = EPROTO;
-      return -1;
-    }
-
-    if (uav_write_all(destination_fd, msg.payload, msg.header.length) < 0)
-      return -1;
-
-    remaining -= msg.header.length;
-  }
-
-  if (uav_agent_proto_recv(transport, &msg) < 0) return -1;
-  if (msg.header.kind != UAV_PROTO_REQUEST ||
-      msg.header.type != UAV_AGENT_MSG_UPLOAD_END || msg.header.length != 0) {
-    errno = EPROTO;
-    return -1;
-  }
-
-  return 0;
-}
-
-int uav_agent_proto_send_program_exit(struct uav_transport* transport,
-                                      int status) {
-  if (status < 0) {
-    errno = EINVAL;
-    return -1;
-  }
-
-  return uav_agent_proto_send_event_u32(transport, UAV_AGENT_MSG_PROGRAM_EXIT,
-                                        (uint32_t)status);
-}
-
-int uav_agent_proto_decode_program_exit(const struct uav_proto_msg* msg,
-                                        int* status) {
-  uint32_t value;
-
-  if (status == NULL) {
-    errno = EINVAL;
-    return -1;
-  }
-  if (msg == NULL || msg->header.kind != UAV_PROTO_EVENT ||
-      uav_agent_proto_decode_u32(msg, UAV_AGENT_MSG_PROGRAM_EXIT, &value) < 0)
-    return -1;
-  if (value > INT_MAX) {
-    errno = EPROTO;
-    return -1;
-  }
-
-  *status = (int)value;
   return 0;
 }

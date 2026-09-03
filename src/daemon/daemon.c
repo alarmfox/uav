@@ -16,7 +16,6 @@
 
 #include "config.h"
 #include "daemon_protocol.h"
-#include "transport.h"
 #include "utils.h"
 
 #define UAVD_BACKLOG 1
@@ -44,63 +43,6 @@ static int g_shutdown_requested = 0;
 static void on_shutdown_requested(int signal_number) {
   (void)signal_number;
   __atomic_store_n(&g_shutdown_requested, 1, __ATOMIC_RELAXED);
-}
-
-static int uavd_peek_sender_credentials(int fd, struct ucred *credentials) {
-  unsigned char byte;
-  struct iovec iov = {
-    .iov_base = &byte,
-    .iov_len = sizeof(byte),
-  };
-  union {
-    struct cmsghdr align;
-    unsigned char bytes[CMSG_SPACE(sizeof(struct ucred))];
-  } control;
-  struct msghdr message;
-  struct cmsghdr *cmsg;
-  ssize_t received;
-
-  for (;;) {
-    memset(&message, 0, sizeof(message));
-    memset(&control, 0, sizeof(control));
-
-    message.msg_iov = &iov;
-    message.msg_iovlen = 1;
-    message.msg_control = control.bytes;
-    message.msg_controllen = sizeof(control.bytes);
-
-    received = recvmsg(fd, &message, MSG_PEEK);
-    if (received < 0 && errno == EINTR)
-      continue;
-    break;
-  }
-
-  if (received < 0)
-    return -1;
-
-  if (received == 0) {
-    errno = ECONNRESET;
-    return -1;
-  }
-
-  if (message.msg_flags & MSG_CTRUNC) {
-    errno = EPROTO;
-    return -1;
-  }
-
-  for (cmsg = CMSG_FIRSTHDR(&message);
-      cmsg != NULL;
-      cmsg = CMSG_NXTHDR(&message, cmsg)) {
-    if (cmsg->cmsg_level == SOL_SOCKET &&
-        cmsg->cmsg_type == SCM_CREDENTIALS &&
-        cmsg->cmsg_len >= CMSG_LEN(sizeof(*credentials))) {
-      memcpy(credentials, CMSG_DATA(cmsg), sizeof(*credentials));
-      return 0;
-    }
-  }
-
-  errno = EPROTO;
-  return -1;
 }
 
 static int uavd_remove_cgroup(const char* path) {
@@ -160,8 +102,7 @@ static int uavd_remove_sandbox_cgroup(const char* root, const char* name) {
   }
   if (uavd_remove_cgroup(path) < 0) ret = -1;
 
-  if (snprintf(path, sizeof(path), "%s/%s", root, name) >=
-      (int)sizeof(path)) {
+  if (snprintf(path, sizeof(path), "%s/%s", root, name) >= (int)sizeof(path)) {
     errno = ENAMETOOLONG;
     return -1;
   }
@@ -195,8 +136,8 @@ static int uavd_cleanup_cgroup_hierarchy(void) {
   if (ret < 0 && saved_errno != 0) errno = saved_errno;
 
   snprintf(pid, sizeof(pid), "%d", getpid());
-  if (uav_write_file("/sys/fs/cgroup/cgroup.procs",
-                     (const unsigned char*)pid, strlen(pid)) < 0) {
+  if (uav_write_file("/sys/fs/cgroup/cgroup.procs", (const unsigned char*)pid,
+                     strlen(pid)) < 0) {
     fprintf(stderr, "[UAVD] failed to leave cgroup hierarchy: %s\n",
             strerror(errno));
     ret = -1;
@@ -307,6 +248,7 @@ static int uavd_setup_socket(void) {
   size_t path_len;
   int bound = 0;
   int fd = -1;
+  int passcred_opt = 1;
   int ret = -1;
   int saved_errno;
   struct sockaddr_un address;
@@ -330,9 +272,17 @@ static int uavd_setup_socket(void) {
     goto cleanup;
   }
 
-  fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
   if (fd < 0) {
     fprintf(stderr, "[UAVD] failed to create socket: %s\n", strerror(errno));
+    goto cleanup;
+  }
+
+  /* Accepted sockets must collect credentials before clients can send. */
+  if (setsockopt(fd, SOL_SOCKET, SO_PASSCRED, &passcred_opt,
+                 sizeof(passcred_opt)) < 0) {
+    fprintf(stderr, "[UAVD] failed to enable credentials: %s\n",
+            strerror(errno));
     goto cleanup;
   }
 
@@ -448,17 +398,9 @@ static int handle_client(int fd) {
   int ret = -1;
   int request_error;
   int saved_errno;
-  int passcred_opt = 1;
-  struct uav_transport* transport = NULL;
   struct uav_proto_msg msg;
   struct ucred peer_creds, sender_creds;
   socklen_t len = sizeof(sender_creds);
-
-  ret = setsockopt(fd, SOL_SOCKET, SO_PASSCRED, &passcred_opt, sizeof(int));
-  if (ret != 0) {
-    fprintf(stderr, "[UAVD] error: failed to set SO_PASSCRED\n");
-    goto cleanup;
-  }
 
   ret = getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer_creds, &len);
   if (ret != 0) {
@@ -466,48 +408,38 @@ static int handle_client(int fd) {
     goto cleanup;
   }
 
-  transport = uav_fd_transport_create(fd);
-  if (transport == NULL) goto cleanup;
-
-  printf("[UAVD] connected client pid=%d uid=%d gid=%d\n", peer_creds.pid, peer_creds.uid,
-         peer_creds.gid);
+  printf("[UAVD] connected client pid=%d uid=%d gid=%d\n", peer_creds.pid,
+         peer_creds.uid, peer_creds.gid);
 
   while (1) {
-    ret = uavd_peek_sender_credentials(fd, &sender_creds);
-    if (ret != 0) goto cleanup;
-
-    ret = uav_daemon_proto_recv(transport, &msg);
+    ret = uav_daemon_proto_receive_request(fd, &msg, &sender_creds);
     if (ret != 0) goto cleanup;
 
     request_error = 0;
-    if (msg.header.kind != UAV_PROTO_REQUEST) {
-      request_error = EPROTO;
-    } else {
-      switch (msg.header.type) {
-        case UAV_DAEMON_MSG_REGISTER_AGENT:
-          /*
-           * Initial registration must come from the process that established
-           * the connection.
-           */
-          if (sender_creds.pid != peer_creds.pid)
-            request_error = EACCES;
-          else
-            request_error =
-              handle_register_agent(sender_creds.pid) < 0 ? errno : 0;
-          break;
-
-        case UAV_DAEMON_MSG_REGISTER_WORKLOAD:
+    switch (msg.type) {
+      case UAV_DAEMON_MSG_REGISTER_AGENT:
+        /*
+         * Initial registration must come from the process that established
+         * the connection.
+         */
+        if (sender_creds.pid != peer_creds.pid)
+          request_error = EACCES;
+        else
           request_error =
+              handle_register_agent(sender_creds.pid) < 0 ? errno : 0;
+        break;
+
+      case UAV_DAEMON_MSG_REGISTER_WORKLOAD:
+        request_error =
             handle_register_workload(sender_creds.pid) < 0 ? errno : 0;
-          break;
+        break;
       default:
         request_error = EPROTO;
         break;
-      }
     }
 
-    if (uav_daemon_proto_send_response(transport, msg.header.type,
-                                       request_error, NULL, 0) < 0)
+    if (uav_daemon_proto_send_response(fd, msg.type, request_error, NULL, 0) <
+        0)
       goto cleanup;
 
     /* A protocol or operation failure leaves daemon state non-retryable. */
@@ -521,7 +453,6 @@ static int handle_client(int fd) {
 
 cleanup:
   saved_errno = errno;
-  if (transport != NULL) uav_transport_destroy(&transport);
   if (fd >= 0) close(fd);
   errno = saved_errno;
 
