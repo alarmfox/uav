@@ -23,12 +23,12 @@ AGENT_TARGET   = uav-agent
 TEST_TARGETS   = test/test_sandbox.out test/test_transport.out \
                  test/test_agent_protocol.out test/test_daemon_protocol.out
 
-UAV_OBJS       = cli/main.o src/sandbox.o src/container.o src/kvm.o \
+UAV_OBJS       = src/cli/main.o src/sandbox.o src/container.o src/kvm.o \
                  src/agent_protocol.o src/protocol_utils.o src/transport.o \
                  src/utils.o src/daemon_protocol.o
-UAVD_OBJS      = daemon/daemon.o src/daemon_protocol.o src/protocol_utils.o \
+UAVD_OBJS      = src/daemon/daemon.o src/daemon_protocol.o src/protocol_utils.o \
                  src/transport.o src/utils.o
-AGENT_OBJS     = agent/agent.o src/agent_protocol.o src/transport.o \
+AGENT_OBJS     = src/agent/agent.o src/agent_protocol.o src/transport.o \
                  src/protocol_utils.o src/utils.o src/daemon_protocol.o
 TEST_OBJS      = src/sandbox.o src/container.o src/kvm.o \
                  src/agent_protocol.o src/daemon_protocol.o \

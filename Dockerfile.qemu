@@ -38,7 +38,6 @@ mount -t cgroup2 cgroup2 /sys/fs/cgroup
 
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin
 
-echo "UAV Alpine/musl debug guest ready"
 EOF
 RUN <<'EOF' cat > /etc/inittab
 ::sysinit:/etc/init.d/rcS
