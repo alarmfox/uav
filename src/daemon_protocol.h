@@ -9,8 +9,8 @@
 #define UAV_DAEMON_PROTO_VERSION 4
 
 enum uav_daemon_proto_msg_type {
-  UAV_DAEMON_MSG_REGISTER_AGENT = 1,
   UAV_DAEMON_MSG_REGISTER_WORKLOAD,
+  UAV_DAEMON_MSG_TEARDOWN_WORKLOAD,
 };
 
 int uav_daemon_proto_send_request(int fd, uint16_t type, const void* payload,

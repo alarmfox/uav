@@ -1,5 +1,7 @@
 CPPFLAGS       = -Isrc/ -D_XOPEN_SOURCE=500 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE
 CFLAGS         = -Wall -Wextra -std=c11 -fstack-protector-strong -fPIE
+BPF_CPPFLAGS   = -Isrc/bpf
+BPF_CFLAGS     = -g -O2 -target bpf -Wno-missing-declarations
 LDFLAGS        = -pie -Wl,-z,relro,-z,now
 UAV_LDLIBS     = -larchive
 UAVD_LDLIBS    =
@@ -21,12 +23,15 @@ UAV_TARGET     = uav
 UAVD_TARGET    = uav-daemon
 AGENT_TARGET   = uav-agent
 TEST_TARGETS   = test/test_sandbox.out test/test_agent_protocol.out test/test_daemon_protocol.out
+BPF_OBJS       = src/bpf/sandbox.bpf.o
+BPF_SKELS      = src/bpf/sandbox.skel.h
+BPF_VMLINUX    = src/bpf/vmlinux.h
 
 UAV_OBJS       = src/cli/main.o src/sandbox.o src/container.o src/kvm.o \
                  src/agent_protocol.o src/protocol_utils.o \
                  src/utils.o src/daemon_protocol.o
 UAVD_OBJS      = src/daemon/daemon.o src/daemon_protocol.o src/protocol_utils.o \
-                 src/utils.o
+                 src/utils.o src/daemon/cgroup.o
 AGENT_OBJS     = src/agent/agent.o src/agent_protocol.o \
                  src/protocol_utils.o src/utils.o src/daemon_protocol.o
 TEST_OBJS      = src/sandbox.o src/container.o src/kvm.o \
@@ -35,7 +40,7 @@ TEST_OBJS      = src/sandbox.o src/container.o src/kvm.o \
 
 .PHONY: all test valgrind package run-qemu clean
 
-all: $(UAV_TARGET) $(UAVD_TARGET) $(AGENT_TARGET) $(TEST_TARGETS)
+all: $(UAV_TARGET) $(UAVD_TARGET) $(AGENT_TARGET) $(TEST_TARGETS) $(BPF_SKELS)
 
 # Binaries
 $(UAV_TARGET): $(UAV_OBJS)
@@ -49,6 +54,12 @@ $(AGENT_TARGET): $(AGENT_OBJS)
 
 $(TEST_TARGETS): %.out: %.o $(TEST_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) $(UAV_LDLIBS)
+
+$(BPF_OBJS): %.bpf.o: %.c $(BPF_VMLINUX)
+	clang $(BPF_CFLAGS) $(BPF_CPPFLAGS) -c $< -o $@
+
+$(BPF_SKELS): %.skel.h: %.bpf.o
+	bpftool gen skeleton $< > $@
 
 # Test
 test: $(TEST_TARGETS)
@@ -75,10 +86,14 @@ package:
 run-qemu: package
 	./scripts/run-qemu.sh src/config.h
 
+$(BPF_VMLINUX):
+	bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
+
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 format:
 	clang-format -style google -i src/*.c src/**/*.c src/*.h  test/*.c test/*.h
 clean:
-	$(RM) $(UAV_TARGET) $(AGENT_TARGET) $(TEST_TARGETS) $(UAVD_TARGET) src/**/*.o src/*.o test/*.o
+	$(RM) $(UAV_TARGET) $(AGENT_TARGET) $(TEST_TARGETS) $(UAVD_TARGET) \
+		$(BPF_OBJS) $(BPF_SKELS) $(BPF_VMLINUX) src/**/*.o src/*.o test/*.o

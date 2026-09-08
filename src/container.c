@@ -29,7 +29,7 @@ static int uav_setup_userns_mappings(pid_t pid, uid_t uid, gid_t gid);
 static int uav_sandbox_become_root(void);
 static int uav_sandbox_setup_overlay(const struct uav_sandbox* s);
 static int uav_sandbox_prepare_runtime(const struct uav_sandbox* s);
-static int uav_sandbox_connect_and_register_to_daemon(void);
+static int uav_sandbox_connect_to_daemon(void);
 static int uav_sandbox_pivot_root(const struct uav_sandbox* s);
 static int sandbox_entrypoint(void* ptr);
 
@@ -691,12 +691,11 @@ out:
   return ret;
 }
 
-static int uav_sandbox_connect_and_register_to_daemon(void) {
+static int uav_sandbox_connect_to_daemon(void) {
   const char* path = UAV_UAVD_CONTROL_PATH;
   int fd = -1, ret = -1, saved_errno;
   size_t path_len;
   struct sockaddr_un address;
-  struct uav_proto_msg response;
 
   path_len = strlen(path);
   if (path_len >= sizeof(address.sun_path)) {
@@ -716,20 +715,6 @@ static int uav_sandbox_connect_and_register_to_daemon(void) {
   ret =
       connect(fd, (const struct sockaddr*)&address, sizeof(struct sockaddr_un));
   if (ret != 0) goto cleanup;
-
-  if (uav_daemon_proto_send_request(fd, UAV_DAEMON_MSG_REGISTER_AGENT, NULL,
-                                    0) < 0 ||
-      uav_daemon_proto_receive_response(fd, UAV_DAEMON_MSG_REGISTER_AGENT,
-                                        &response) < 0)
-    goto cleanup;
-  if (response.length != 0) {
-    errno = EPROTO;
-    goto cleanup;
-  }
-  if (response.error != 0) {
-    errno = response.error;
-    goto cleanup;
-  }
 
   ret = 0;
 cleanup:
@@ -840,7 +825,7 @@ static int sandbox_entrypoint(void* ptr) {
   }
 
   /* Register in the sandbox cgroup as sandbox */
-  daemon_fd = uav_sandbox_connect_and_register_to_daemon();
+  daemon_fd = uav_sandbox_connect_to_daemon();
   if (daemon_fd < 0) {
     err_msg = "uavd connect and register";
     goto fail;

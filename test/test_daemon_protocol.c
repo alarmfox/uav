@@ -43,11 +43,11 @@ TEST(test_daemon_protocol_request_response) {
   TEST_ASSERT_EQ(0, socketpair(AF_UNIX, SOCK_SEQPACKET, 0, fds));
   TEST_ASSERT_EQ(0, enable_passcred(fds[1]));
   TEST_ASSERT_EQ(
-      0, uav_daemon_proto_send_request(fds[0], UAV_DAEMON_MSG_REGISTER_AGENT,
+      0, uav_daemon_proto_send_request(fds[0], UAV_DAEMON_MSG_REGISTER_WORKLOAD,
                                        payload, sizeof(payload)));
   TEST_ASSERT_EQ(0,
                  uav_daemon_proto_receive_request(fds[1], &msg, &credentials));
-  TEST_ASSERT_EQ(UAV_DAEMON_MSG_REGISTER_AGENT, msg.type);
+  TEST_ASSERT_EQ(UAV_DAEMON_MSG_REGISTER_WORKLOAD, msg.type);
   TEST_ASSERT_EQ(0, msg.error);
   TEST_ASSERT_EQ(sizeof(payload), msg.length);
   TEST_ASSERT_EQ(0, memcmp(payload, msg.payload, sizeof(payload)));
@@ -56,10 +56,10 @@ TEST(test_daemon_protocol_request_response) {
   TEST_ASSERT_EQ(getgid(), credentials.gid);
 
   TEST_ASSERT_EQ(
-      0, uav_daemon_proto_send_response(fds[1], UAV_DAEMON_MSG_REGISTER_AGENT,
+      0, uav_daemon_proto_send_response(fds[1], UAV_DAEMON_MSG_REGISTER_WORKLOAD,
                                         EBUSY, payload, sizeof(payload)));
   TEST_ASSERT_EQ(0, uav_daemon_proto_receive_response(
-                        fds[0], UAV_DAEMON_MSG_REGISTER_AGENT, &msg));
+                        fds[0], UAV_DAEMON_MSG_REGISTER_WORKLOAD, &msg));
   TEST_ASSERT_EQ(EBUSY, msg.error);
   TEST_ASSERT_EQ(sizeof(payload), msg.length);
   TEST_ASSERT_EQ(0, memcmp(payload, msg.payload, sizeof(payload)));
@@ -101,7 +101,7 @@ TEST(test_daemon_protocol_listener_credentials_are_race_free) {
   TEST_ASSERT_EQ(
       0, connect(client, (const struct sockaddr*)&address, address_length));
   TEST_ASSERT_EQ(0, uav_daemon_proto_send_request(
-                        client, UAV_DAEMON_MSG_REGISTER_AGENT, NULL, 0));
+                        client, UAV_DAEMON_MSG_REGISTER_WORKLOAD, NULL, 0));
 
   accepted = accept(listener, NULL, NULL);
   TEST_ASSERT(accepted >= 0);
@@ -154,9 +154,9 @@ TEST(test_daemon_protocol_rejects_wrong_response_type) {
 
   TEST_ASSERT_EQ(0, socketpair(AF_UNIX, SOCK_SEQPACKET, 0, fds));
   TEST_ASSERT_EQ(0, uav_daemon_proto_send_response(
-                        fds[0], UAV_DAEMON_MSG_REGISTER_AGENT, 0, NULL, 0));
+                        fds[0], UAV_DAEMON_MSG_REGISTER_WORKLOAD, 0, NULL, 0));
   TEST_ASSERT_EQ(-1, uav_daemon_proto_receive_response(
-                         fds[1], UAV_DAEMON_MSG_REGISTER_WORKLOAD, &msg));
+                         fds[1], UAV_DAEMON_MSG_TEARDOWN_WORKLOAD, &msg));
   TEST_ASSERT_EQ(EPROTO, errno);
 
   close(fds[0]);
@@ -176,13 +176,13 @@ TEST(test_daemon_protocol_rejects_invalid_frames) {
   TEST_ASSERT_EQ(
       0, uav_proto_seqpacket_send(
              fds[0], UAV_DAEMON_PROTO_MAGIC, UAV_DAEMON_PROTO_VERSION + 1,
-             UAV_PROTO_REQUEST, UAV_DAEMON_MSG_REGISTER_AGENT, 0, NULL, 0));
+             UAV_PROTO_REQUEST, UAV_DAEMON_MSG_REGISTER_WORKLOAD, 0, NULL, 0));
   TEST_ASSERT_EQ(-1,
                  uav_daemon_proto_receive_request(fds[1], &msg, &credentials));
   TEST_ASSERT_EQ(EPROTO, errno);
 
   make_header(header, UAV_DAEMON_PROTO_MAGIC, UAV_DAEMON_PROTO_VERSION,
-              UAV_PROTO_REQUEST, UAV_DAEMON_MSG_REGISTER_AGENT, 1, 0);
+              UAV_PROTO_REQUEST, UAV_DAEMON_MSG_REGISTER_WORKLOAD, 1, 0);
   TEST_ASSERT_EQ(TEST_HEADER_SIZE,
                  send(fds[0], header, sizeof(header), MSG_NOSIGNAL));
   TEST_ASSERT_EQ(-1,
@@ -190,7 +190,7 @@ TEST(test_daemon_protocol_rejects_invalid_frames) {
   TEST_ASSERT_EQ(EPROTO, errno);
 
   make_header(header, UAV_DAEMON_PROTO_MAGIC, UAV_DAEMON_PROTO_VERSION,
-              UAV_PROTO_REQUEST, UAV_DAEMON_MSG_REGISTER_AGENT, 0, 1);
+              UAV_PROTO_REQUEST, UAV_DAEMON_MSG_REGISTER_WORKLOAD, 0, 1);
   TEST_ASSERT_EQ(TEST_HEADER_SIZE,
                  send(fds[0], header, sizeof(header), MSG_NOSIGNAL));
   TEST_ASSERT_EQ(1, send(fds[0], "x", 1, MSG_NOSIGNAL));
@@ -213,7 +213,7 @@ TEST(test_daemon_protocol_rejects_oversized_record) {
   frame = calloc(1, size);
   TEST_ASSERT_NOT_NULL(frame);
   make_header(frame, UAV_DAEMON_PROTO_MAGIC, UAV_DAEMON_PROTO_VERSION,
-              UAV_PROTO_REQUEST, UAV_DAEMON_MSG_REGISTER_AGENT, 0,
+              UAV_PROTO_REQUEST, UAV_DAEMON_MSG_REGISTER_WORKLOAD, 0,
               UAV_PROTO_MAX_PAYLOAD + 1);
 
   TEST_ASSERT_EQ(0, socketpair(AF_UNIX, SOCK_SEQPACKET, 0, fds));

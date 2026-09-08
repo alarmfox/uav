@@ -26,5 +26,6 @@ _Static_assert(UAV_SANDBOX_KVM_GUEST_RAM % 16 == 0,
 #define UAV_UAVD_RUNTIME_DIR "/tmp/uavd"
 #define UAV_UAVD_CONTROL_PATH UAV_UAVD_RUNTIME_DIR "/control.sock"
 #define UAV_UAVD_ROOT_CGROUP_NAME "uav"
+#define UAV_UAVD_GROUP_NAME "uav"
 
 #endif  //! UAV_CONFIG_H
