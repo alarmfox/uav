@@ -38,7 +38,7 @@ output=$(mktemp "$(dirname "$initramfs")/.$(basename "$initramfs").tmp.XXXXXX")
 mkdir "$work/root"
 
 DOCKER_BUILDKIT=1 docker build \
-    --file "$project/Dockerfile.qemu" \
+    --file "$project/Dockerfile.rootfs" \
     --target rootfs \
     --output "type=local,dest=$work/root" \
     "$project"
