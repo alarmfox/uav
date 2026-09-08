@@ -13,4 +13,4 @@ test/*.out
 !/Makefile
 !/README.md
 !/.dockerignore
-!/Dockerfile.qemu
+!/Dockerfile.rootfs

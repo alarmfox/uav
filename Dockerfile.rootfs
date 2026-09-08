@@ -1,0 +1,47 @@
+FROM alpine:3.24.1 AS build
+
+RUN apk add --no-cache \
+    build-base \
+    linux-headers \
+    libarchive-dev \
+    libcap-dev
+
+WORKDIR /src
+COPY . .
+RUN make clean && make
+
+FROM alpine:3.24.1 AS rootfs
+
+# Keep the dynamic loader and all runtime dependencies in the guest image.
+RUN apk add --no-cache \
+    busybox \
+    libarchive \
+    libcap
+
+COPY --from=build /src/uav /sbin/uav
+COPY --from=build /src/uav-daemon /sbin/uav-daemon
+COPY --from=build /src/uav-agent /sbin/uav-agent
+COPY --from=build /src/test/*.out /usr/local/bin/
+RUN mkdir -p /etc/init.d
+RUN <<'EOF' cat > /etc/init.d/rcS
+#!/bin/sh
+set -eu
+
+mkdir -p /dev /proc /sys /tmp
+
+mount -t devtmpfs devtmpfs /dev
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+
+mkdir -p /sys/fs/cgroup
+mount -t cgroup2 cgroup2 /sys/fs/cgroup
+
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+
+EOF
+RUN <<'EOF' cat > /etc/inittab
+::sysinit:/etc/init.d/rcS
+::respawn:/bin/sh
+::ctrlaltdel:/sbin/reboot
+EOF
+RUN chmod 0755 /etc/init.d/rcS && ln -sf /sbin/init /init
